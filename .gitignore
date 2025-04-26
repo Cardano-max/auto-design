@@ -1,0 +1,35 @@
+# Virtual environment
+venv/
+env/
+.env
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Logs
+logs/
+*.log
+
+# Images
+images/input/*
+images/output/*
+
+# Keep .gitkeep files to maintain directory structure
+!images/input/.gitkeep
+!images/output/.gitkeep
+
+# Chrome driver
+.wdm/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo

@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Marketing Bot Demo</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --whatsapp-green: #128C7E;
+            --whatsapp-light-green: #25D366;
+            --whatsapp-bg: #ECE5DD;
+            --whatsapp-message-bg: #ffffff;
+            --whatsapp-my-message-bg: #DCF8C6;
+            --whatsapp-header-bg: #075E54;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background-color: #f0f0f0;
+            display: flex;
+            min-height: 100vh;
+        }
+        
+        .container {
+            display: flex;
+            width: 100%;
+            max-width: 1200px;
+            margin: 20px auto;
+            height: calc(100vh - 40px);
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .sidebar {
+            width: 30%;
+            background-color: #ffffff;
+            border-right: 1px solid #e0e0e0;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .chat-window {
+            width: 70%;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .header {
+            background-color: var(--whatsapp-header-bg);
+            color: white;
+            padding: 10px 15px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .header img {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            margin-right: 10px;
+        }
+        
+        .header h2 {
+            font-size: 16px;
+            font-weight: 500;
+        }
+        
+        .settings-header {
+            background-color: #f0f0f0;
+            padding: 15px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        .settings-header h2 {
+            font-size: 18px;
+            color: #333;
+        }
+        
+        .settings-content {
+            padding: 15px;
+            flex-grow: 1;
+            overflow-y: auto;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-size: 14px;
+        }
+        
+        input[type="text"],
+        input[type="number"],
+        select,
+        textarea {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        button {
+            background-color: var(--whatsapp-green);
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        
+        button:hover {
+            background-color: var(--whatsapp-light-green);
+        }
+        
+        .image-upload {
+            border: 2px dashed #ddd;
+            padding: 20px;
+            text-align: center;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            position: relative;
+        }
+        
+        .image-upload img {
+            max-width: 100%;
+            max-height: 200px;
+            display: none;
+            margin: 10px auto;
+        }
+        
+        .image-preview {
+            margin-top: 10px;
+        }
+        
+        .chat-messages {
+            flex-grow: 1;
+            background-color: var(--whatsapp-bg);
+            padding: 15px;
+            overflow-y: auto;
+        }
+        
+        .message {
+            margin-bottom: 10px;
+            max-width: 70%;
+            padding: 8px 12px;
+            border-radius: 7.5px;
+            position: relative;
+            word-wrap: break-word;
+        }
+        
+        .message.received {
+            background-color: var(--whatsapp-message-bg);
+            align-self: flex-start;
+            border-top-left-radius: 0;
+        }
+        
+        .message.sent {
+            background-color: var(--whatsapp-my-message-bg);
+            align-self: flex-end;
+            margin-left: auto;
+            border-top-right-radius: 0;
+        }
+        
+        .message-time {
+            font-size: 10px;
+            color: #999;
+            text-align: right;
+            margin-top: 5px;
+        }
+        
+        .message img {
+            max-width: 100%;
+            border-radius: 5px;
+            margin-top: 5px;
+        }
+        
+        .chat-input {
+            display: flex;
+            align-items: center;
+            background-color: #f0f0f0;
+            padding: 10px;
+        }
+        
+        .chat-input input {
+            flex-grow: 1;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 20px;
+            margin-right: 10px;
+        }
+        
+        .chat-input button {
+            background-color: var(--whatsapp-green);
+            color: white;
+            border: none;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .message-content {
+            white-space: pre-wrap;
+        }
+        
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .loading-spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid var(--whatsapp-green);
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 2s linear infinite;
+            margin-right: 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .status-message {
+            margin: 10px 0;
+            text-align: center;
+            color: #666;
+            font-style: italic;
+            font-size: 12px;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        .tab {
+            padding: 10px 15px;
+            cursor: pointer;
+            background-color: #f5f5f5;
+            border: none;
+            flex-grow: 1;
+            text-align: center;
+        }
+        
+        .tab.active {
+            background-color: #ffffff;
+            border-bottom: 2px solid var(--whatsapp-green);
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Settings Sidebar -->
+        <div class="sidebar">
+            <div class="settings-header">
+                <h2>Marketing Bot Settings</h2>
+            </div>
+            
+            <div class="tabs">
+                <button class="tab active" data-tab="settings">Settings</button>
+                <button class="tab" data-tab="logs">Logs</button>
+            </div>
+            
+            <div class="settings-content tab-content active" id="settings-tab">
+                <div class="form-group">
+                    <button id="initialize-bot">Initialize Bot</button>
+                    <div id="bot-status" class="status-message">Bot not initialized</div>
+                </div>
+                
+                <hr>
+                
+                <div class="form-group">
+                    <label for="product-type">Product Type:</label>
+                    <select id="product-type">
+                        <option value="beverage">Beverage</option>
+                        <option value="food">Food</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+                
+                <div class="image-upload" id="image-upload-area">
+                    <p>Drag & drop product image here or click to upload</p>
+                    <input type="file" id="product-image" accept="image/*" style="display: none;">
+                    <div class="image-preview">
+                        <img id="preview-image" src="#" alt="Preview">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="company-name">Company Name:</label>
+                    <input type="text" id="company-name" placeholder="e.g., Choco and Bread">
+                </div>
+                
+                <div class="form-group">
+                    <label for="product-name">Product Name:</label>
+                    <input type="text" id="product-name" placeholder="e.g., Chocolate Cream Frappuccino">
+                </div>
+                
+                <div class="form-group">
+                    <label for="price">Price:</label>
+                    <input type="text" id="price" placeholder="e.g., Rs 300">
+                </div>
+                
+                <div class="form-group">
+                    <label for="tagline">Tagline (optional):</label>
+                    <input type="text" id="tagline" placeholder="e.g., Indulge in pure bliss">
+                </div>
+                
+                <div class="form-group">
+                    <label for="address">Address/Location (optional):</label>
+                    <input type="text" id="address" placeholder="e.g., Firozabad, Pakistan">
+                </div>
+                
+                <div class="form-group">
+                    <label for="background-style">Background Style:</label>
+                    <select id="background-style">
+                        <option value="light beige">Light Beige</option>
+                        <option value="soft gradient">Soft Gradient</option>
+                        <option value="dark theme">Dark Theme</option>
+                        <option value="custom">Custom Color</option>
+                    </select>
+                </div>
+                
+                <div class="form-group" id="custom-color-group" style="display: none;">
+                    <label for="custom-color">Custom Color:</label>
+                    <input type="text" id="custom-color" placeholder="e.g., light blue, pastel pink">
+                </div>
+                
+                <div class="form-group">
+                    <button id="generate-image">Generate Marketing Image</button>
+                </div>
+            </div>
+            
+            <div class="settings-content tab-content" id="logs-tab">
+                <div id="log-content" style="white-space: pre-wrap; font-family: monospace; font-size: 12px;">
+                    [System] Welcome to the Marketing Bot Demo
+                </div>
+            </div>
+        </div>
+        
+        <!-- Chat Window -->
+        <div class="chat-window">
+            <div class="header">
+                <img src="https://cdn-icons-png.flaticon.com/512/124/124034.png" alt="WhatsApp Icon">
+                <h2>Marketing Bot</h2>
+            </div>
+            
+            <div class="chat-messages" id="chat-messages">
+                <div class="message received">
+                    <div class="message-content">👋 Hi! I'm your Marketing Bot. I can help you create professional marketing images for your products.</div>
+                    <div class="message-time">12:00 PM</div>
+                </div>
+                
+                <div class="message received">
+                    <div class="message-content">Please upload a product image and provide details like company name, product name, and price to get started.</div>
+                    <div class="message-time">12:01 PM</div>
+                </div>
+            </div>
+            
+            <div class="chat-input">
+                <input type="text" id="message-input" placeholder="Type a message">
+                <button id="send-message"><i class="fas fa-paper-plane"></i></button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Global variables
+        let userId = `user_${Date.now()}`;
+        let botInitialized = false;
+        
+        // DOM Elements
+        const initializeButton = document.getElementById('initialize-bot');
+        const botStatus = document.getElementById('bot-status');
+        const imageUploadArea = document.getElementById('image-upload-area');
+        const productImage = document.getElementById('product-image');
+        const previewImage = document.getElementById('preview-image');
+        const generateButton = document.getElementById('generate-image');
+        const chatMessages = document.getElementById('chat-messages');
+        const messageInput = document.getElementById('message-input');
+        const sendButton = document.getElementById('send-message');
+        const backgroundStyle = document.getElementById('background-style');
+        const customColorGroup = document.getElementById('custom-color-group');
+        const tabs = document.querySelectorAll('.tab');
+        const logContent = document.getElementById('log-content');
+        
+        // Event Listeners
+        initializeButton.addEventListener('click', initializeBot);
+        imageUploadArea.addEventListener('click', () => productImage.click());
+        productImage.addEventListener('change', handleImageUpload);
+        generateButton.addEventListener('click', generateMarketingImage);
+        sendButton.addEventListener('click', sendMessage);
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage();
+        });
+        backgroundStyle.addEventListener('change', () => {
+            if (backgroundStyle.value === 'custom') {
+                customColorGroup.style.display = 'block';
+            } else {
+                customColorGroup.style.display = 'none';
+            }
+        });
+        
+        // Setup drag and drop for image upload
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            imageUploadArea.addEventListener(eventName, preventDefaults, false);
+        });
+        
+        ['dragenter', 'dragover'].forEach(eventName => {
+            imageUploadArea.addEventListener(eventName, highlight, false);
+        });
+        
+        ['dragleave', 'drop'].forEach(eventName => {
+            imageUploadArea.addEventListener(eventName, unhighlight, false);
+        });
+        
+        imageUploadArea.addEventListener('drop', handleDrop, false);
+        
+        // Tab switching
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                // Remove active class from all tabs and content
+                tabs.forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(content => {
+                    content.classList.remove('active');
+                });
+                
+                // Add active class to clicked tab and its content
+                tab.classList.add('active');
+                const tabId = `${tab.dataset.tab}-tab`;
+                document.getElementById(tabId).classList.add('active');
+            });
+        });
+        
+        // Functions
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        
+        function highlight() {
+            imageUploadArea.classList.add('highlighted');
+        }
+        
+        function unhighlight() {
+            imageUploadArea.classList.remove('highlighted');
+        }
+        
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            
+            if (files.length) {
+                productImage.files = files;
+                handleImageUpload();
+            }
+        }
+        
+        async function initializeBot() {
+            addToLog('Initializing bot...');
+            botStatus.textContent = 'Initializing...';
+            initializeButton.disabled = true;
+            
+            try {
+                const response = await fetch('/api/initialize-bot', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        headless: false  // Set to true for production
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    botInitialized = true;
+                    botStatus.textContent = 'Bot initialized successfully';
+                    initializeButton.textContent = 'Restart Bot';
+                    addToLog('Bot initialized successfully');
+                    addBotMessage('I\'m ready! Please upload a product image and provide details to generate a marketing image.');
+                } else {
+                    botStatus.textContent = `Initialization failed: ${data.error || 'Unknown error'}`;
+                    addToLog(`Bot initialization failed: ${data.error || 'Unknown error'}`);
+                    addBotMessage('Sorry, I had trouble initializing. Please try again by clicking the "Initialize Bot" button.');
+                }
+            } catch (error) {
+                botStatus.textContent = `Error: ${error.message}`;
+                addToLog(`Error initializing bot: ${error.message}`);
+                addBotMessage('Sorry, I encountered an error during initialization. Please try again later.');
+            }
+            
+            initializeButton.disabled = false;
+        }
+        
+        async function handleImageUpload() {
+            const file = productImage.files[0];
+            if (!file) return;
+            
+            // Preview the image
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                previewImage.src = e.target.result;
+                previewImage.style.display = 'block';
+            }
+            reader.readAsDataURL(file);
+            
+            // Upload the image
+            addToLog(`Uploading image: ${file.name}`);
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('user_id', userId);
+            
+            try {
+                addBotMessage('Uploading your product image...');
+                
+                const response = await fetch('/api/upload-image', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addToLog(`Image uploaded successfully: ${data.image_url}`);
+                    addBotMessage('Image uploaded successfully! Now, please provide the following details:');
+                    addBotMessage(
+                        '1. Company Name: [your company name]\n' +
+                        '2. Product Name: [product name]\n' +
+                        '3. Price: [price with currency]\n' +
+                        '4. Tagline (optional): [your tagline]\n' +
+                        '5. Address (optional): [your address/location]'
+                    );
+                } else {
+                    addToLog(`Image upload failed: ${data.error}`);
+                    addBotMessage(`Sorry, I couldn't upload your image: ${data.error}`);
+                }
+            } catch (error) {
+                addToLog(`Error uploading image: ${error.message}`);
+                addBotMessage('Sorry, I encountered an error uploading your image. Please try again.');
+            }
+        }
+        
+        async function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message) return;
+            
+            // Add user message to chat
+            addUserMessage(message);
+            messageInput.value = '';
+            
+            // Process the message - this is just for demo purposes
+            // In a real implementation, this would send the message to the WhatsApp API
+            processMessage(message);
+        }
+        
+        function processMessage(message) {
+            // Check for specific commands
+            if (message.toLowerCase() === 'generate' || message.toLowerCase() === 'create image') {
+                generateMarketingImage();
+                return;
+            }
+            
+            // Process details in the message
+            let detailsFound = false;
+            
+            // Check for company name
+            if (message.includes('Company Name:') || message.includes('company:') || message.includes('company name:')) {
+                const match = message.match(/(?:Company Name:|company:|company name:)\s*([^\n]+)/i);
+                if (match && match[1]) {
+                    document.getElementById('company-name').value = match[1].trim();
+                    detailsFound = true;
+                }
+            }
+            
+            // Check for product name
+            if (message.includes('Product Name:') || message.includes('product:') || message.includes('product name:')) {
+                const match = message.match(/(?:Product Name:|product:|product name:)\s*([^\n]+)/i);
+                if (match && match[1]) {
+                    document.getElementById('product-name').value = match[1].trim();
+                    detailsFound = true;
+                }
+            }
+            
+            // Check for price
+            if (message.includes('Price:') || message.includes('price:')) {
+                const match = message.match(/(?:Price:|price:)\s*([^\n]+)/i);
+                if (match && match[1]) {
+                    document.getElementById('price').value = match[1].trim();
+                    detailsFound = true;
+                }
+            }
+            
+            // Check for tagline
+            if (message.includes('Tagline:') || message.includes('tagline:')) {
+                const match = message.match(/(?:Tagline:|tagline:)\s*([^\n]+)/i);
+                if (match && match[1]) {
+                    document.getElementById('tagline').value = match[1].trim();
+                    detailsFound = true;
+                }
+            }
+            
+            // Check for address
+            if (message.includes('Address:') || message.includes('address:') || message.includes('Location:') || message.includes('location:')) {
+                const match = message.match(/(?:Address:|address:|Location:|location:)\s*([^\n]+)/i);
+                if (match && match[1]) {
+                    document.getElementById('address').value = match[1].trim();
+                    detailsFound = true;
+                }
+            }
+            
+            // If no details were found, try to intelligently guess what the user provided
+            if (!detailsFound) {
+                const lines = message.split('\n');
+                
+                if (lines.length === 1 && !document.getElementById('company-name').value) {
+                    // If there's just one line and no company name yet, assume it's the company name
+                    document.getElementById('company-name').value = message.trim();
+                    detailsFound = true;
+                } else {
+                    // Try to assign values to empty fields in order of importance
+                    for (const line of lines) {
+                        if (line.trim()) {
+                            if (!document.getElementById('company-name').value) {
+                                document.getElementById('company-name').value = line.trim();
+                                detailsFound = true;
+                                break;
+                            } else if (!document.getElementById('product-name').value) {
+                                document.getElementById('product-name').value = line.trim();
+                                detailsFound = true;
+                                break;
+                            } else if (!document.getElementById('price').value) {
+                                document.getElementById('price').value = line.trim();
+                                detailsFound = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Update the session with the new details
+            updateSessionDetails();
+            
+            // Respond based on what details we have
+            if (detailsFound) {
+                // Prepare a summary of what we have so far
+                let summary = 'Thank you! Here\'s what I have so far:\n\n';
+                const companyName = document.getElementById('company-name').value;
+                const productName = document.getElementById('product-name').value;
+                const price = document.getElementById('price').value;
+                const tagline = document.getElementById('tagline').value;
+                const address = document.getElementById('address').value;
+                
+                if (companyName) summary += `• Company Name: ${companyName}\n`;
+                if (productName) summary += `• Product Name: ${productName}\n`;
+                if (price) summary += `• Price: ${price}\n`;
+                if (tagline) summary += `• Tagline: ${tagline}\n`;
+                if (address) summary += `• Address: ${address}\n`;
+                
+                if (companyName && productName && price) {
+                    summary += '\nYou can now send "generate" to create your marketing image, or continue providing additional details.';
+                } else {
+                    const missing = [];
+                    if (!companyName) missing.push('Company Name');
+                    if (!productName) missing.push('Product Name');
+                    if (!price) missing.push('Price');
+                    
+                    summary += `\nI still need: ${missing.join(', ')}`;
+                }
+                
+                addBotMessage(summary);
+            } else {
+                addBotMessage(
+                    "I couldn't identify any details in your message. Please use the format:\n\n" +
+                    "Company Name: [your company name]\n" +
+                    "Product Name: [product name]\n" +
+                    "Price: [price]\n" +
+                    "Tagline: [your tagline]\n" +
+                    "Address: [your address/location]"
+                );
+            }
+        }
+        
+        async function updateSessionDetails() {
+            const details = {
+                user_id: userId,
+                company_name: document.getElementById('company-name').value,
+                product_name: document.getElementById('product-name').value,
+                price: document.getElementById('price').value,
+                tagline: document.getElementById('tagline').value,
+                address: document.getElementById('address').value,
+                background_style: document.getElementById('background-style').value
+            };
+            
+            if (details.background_style === 'custom') {
+                details.background_style = document.getElementById('custom-color').value || 'light beige';
+            }
+            
+            try {
+                const response = await fetch('/api/update-details', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(details)
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addToLog('Details updated successfully');
+                } else {
+                    addToLog(`Failed to update details: ${data.error}`);
+                }
+            } catch (error) {
+                addToLog(`Error updating details: ${error.message}`);
+            }
+        }
+        
+        async function generateMarketingImage() {
+            // Check if the bot is initialized
+            if (!botInitialized) {
+                addBotMessage('Please initialize the bot first by clicking the "Initialize Bot" button.');
+                return;
+            }
+            
+            // Check if we have the minimum required details
+            const companyName = document.getElementById('company-name').value;
+            const productName = document.getElementById('product-name').value;
+            const price = document.getElementById('price').value;
+            
+            if (!previewImage.src || previewImage.src === '#') {
+                addBotMessage('Please upload a product image first.');
+                return;
+            }
+            
+            if (!companyName) {
+                addBotMessage('Please provide a company name.');
+                return;
+            }
+            
+            if (!productName) {
+                addBotMessage('Please provide a product name.');
+                return;
+            }
+            
+            if (!price) {
+                addBotMessage('Please provide a price.');
+                return;
+            }
+            
+            // Update session details
+            await updateSessionDetails();
+            
+            // Generate the marketing image
+            addBotMessage('Generating your marketing image... This may take a moment.');
+            addToLog('Generating marketing image...');
+            
+            const loadingMessage = document.createElement('div');
+            loadingMessage.className = 'message received loading';
+            loadingMessage.innerHTML = '<div class="loading-spinner"></div><div>Generating image...</div>';
+            chatMessages.appendChild(loadingMessage);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            
+            try {
+                const response = await fetch('/api/generate-image', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        product_type: document.getElementById('product-type').value
+                    })
+                });
+                
+                const data = await response.json();
+                
+                // Remove loading message
+                chatMessages.removeChild(loadingMessage);
+                
+                if (data.success) {
+                    addToLog(`Marketing image generated successfully: ${data.image_url}`);
+                    
+                    // Add the image to the chat
+                    const imageMessage = document.createElement('div');
+                    imageMessage.className = 'message received';
+                    imageMessage.innerHTML = `
+                        <div class="message-content">Here's your marketing image:</div>
+                        <img src="${data.image_url}" alt="Generated Marketing Image">
+                        <div class="message-time">${getCurrentTime()}</div>
+                    `;
+                    chatMessages.appendChild(imageMessage);
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                    
+                    addBotMessage('You can download this image or generate another one with different details.');
+                } else {
+                    addToLog(`Failed to generate marketing image: ${data.error}`);
+                    addBotMessage(`Sorry, I couldn't generate your marketing image: ${data.error}`);
+                }
+            } catch (error) {
+                // Remove loading message
+                chatMessages.removeChild(loadingMessage);
+                
+                addToLog(`Error generating marketing image: ${error.message}`);
+                addBotMessage('Sorry, I encountered an error generating your marketing image. Please try again.');
+            }
+        }
+        
+        function addUserMessage(message) {
+            const messageElement = document.createElement('div');
+            messageElement.className = 'message sent';
+            messageElement.innerHTML = `
+                <div class="message-content">${message}</div>
+                <div class="message-time">${getCurrentTime()}</div>
+            `;
+            chatMessages.appendChild(messageElement);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        function addBotMessage(message) {
+            const messageElement = document.createElement('div');
+            messageElement.className = 'message received';
+            messageElement.innerHTML = `
+                <div class="message-content">${message}</div>
+                <div class="message-time">${getCurrentTime()}</div>
+            `;
+            chatMessages.appendChild(messageElement);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        function addToLog(message) {
+            const timestamp = new Date().toISOString();
+            logContent.textContent += `\n[${timestamp}] ${message}`;
+            logContent.scrollTop = logContent.scrollHeight;
+        }
+        
+        function getCurrentTime() {
+            const now = new Date();
+            let hours = now.getHours();
+            const minutes = now.getMinutes().toString().padStart(2, '0');
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            hours = hours % 12;
+            hours = hours ? hours : 12; // the hour '0' should be '12'
+            return `${hours}:${minutes} ${ampm}`;
+        }
+    </script>
+</body>
+</html>

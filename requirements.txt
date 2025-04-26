@@ -1,0 +1,6 @@
+selenium==4.15.2
+webdriver-manager==4.0.1
+flask==2.3.3
+pillow==10.1.0
+python-dotenv==1.0.0
+requests==2.31.0
