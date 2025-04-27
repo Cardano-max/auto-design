@@ -1,0 +1,1 @@
+web: gunicorn marketing_automation_api:app --workers 2 --timeout 120
