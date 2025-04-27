@@ -47,7 +47,12 @@ os.makedirs('images/output', exist_ok=True)
 user_sessions = {}
 
 # Initialize OpenAI with compatibility handling
-OPENAI_API_KEY = "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"
+# IMPORTANT: Add OPENAI_API_KEY to your Railway variables too!
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')  # Add this to Railway variables
+
+if not OPENAI_API_KEY:
+    logger.error("OPENAI_API_KEY not found in environment variables!")
+    raise ValueError("OPENAI_API_KEY is required")
 
 try:
     from openai import OpenAI
@@ -60,10 +65,22 @@ except Exception as e:
     openai_client = openai
     OPENAI_VERSION = "legacy"
 
-# Twilio configuration
-TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID', 'ACfa677ef9401c892d4480adb9875ea361')
-TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN', '25badeb30fa8dcda00d49a941e111a40')
-TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER', '+19787344086')
+# Twilio configuration - ALL from environment variables, no fallback values
+TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
+TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
+TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER')
+
+# Validate required environment variables
+required_vars = {
+    'TWILIO_ACCOUNT_SID': TWILIO_ACCOUNT_SID,
+    'TWILIO_AUTH_TOKEN': TWILIO_AUTH_TOKEN,
+    'TWILIO_PHONE_NUMBER': TWILIO_PHONE_NUMBER
+}
+
+missing_vars = [var for var, value in required_vars.items() if not value]
+if missing_vars:
+    logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+    raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
 # Initialize Twilio client
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
