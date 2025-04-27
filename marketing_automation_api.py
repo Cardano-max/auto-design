@@ -15,7 +15,6 @@ import urllib.request
 import requests
 from datetime import datetime
 from typing import Optional, Dict, List
-from openai import OpenAI
 from PIL import Image
 from io import BytesIO
 from flask import Flask, request, jsonify, render_template, send_from_directory
@@ -47,9 +46,19 @@ os.makedirs('images/output', exist_ok=True)
 # Store user sessions
 user_sessions = {}
 
-# Initialize OpenAI client with your API key
+# Initialize OpenAI with compatibility handling
 OPENAI_API_KEY = "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"
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
+try:
+    from openai import OpenAI
+    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    OPENAI_VERSION = "new"
+except Exception as e:
+    logger.warning(f"Using legacy OpenAI API: {str(e)}")
+    import openai
+    openai.api_key = OPENAI_API_KEY
+    openai_client = openai
+    OPENAI_VERSION = "legacy"
 
 # Twilio configuration
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID', 'ACfa677ef9401c892d4480adb9875ea361')
@@ -66,7 +75,7 @@ twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 class PromptTemplates:
     @staticmethod
     def get_master_template(product_details: Dict) -> str:
-        """Generate the master prompt template with product details for GPT Image 1"""
+        """Generate the master prompt template with product details"""
         return f"""Create a professional marketing poster for a product with these specifications:
 
 1. PRODUCT PRESENTATION:
@@ -93,7 +102,7 @@ The final image should look like it was created by an expert graphic designer fo
 
     @staticmethod
     def get_beverage_template(product_details: Dict) -> str:
-        """Generate beverage-specific prompt template for GPT Image 1"""
+        """Generate beverage-specific prompt template"""
         return f"""Create a premium café marketing poster for a beverage with these specifications:
 
 1. PRODUCT ENHANCEMENT:
@@ -121,7 +130,7 @@ Create a professional marketing poster as described above.
 
     @staticmethod
     def get_food_template(product_details: Dict) -> str:
-        """Generate food-specific prompt template for GPT Image 1"""
+        """Generate food-specific prompt template"""
         return f"""Create an appetizing marketing poster for a food product with these specifications:
 
 1. PRODUCT PRESENTATION:
@@ -153,11 +162,13 @@ Create a professional food marketing poster as described above.
 
 class ImageGenerator:
     def __init__(self, api_key: str):
-        self.client = OpenAI(api_key=api_key)
-        logger.info("ImageGenerator initialized with OpenAI API")
+        self.api_key = api_key
+        self.client = openai_client
+        self.openai_version = OPENAI_VERSION
+        logger.info(f"ImageGenerator initialized with OpenAI API ({self.openai_version} version)")
     
     def generate_marketing_image(self, product_image_path: str, product_details: Dict, product_type: str = "beverage") -> Optional[str]:
-        """Generate a marketing image using GPT Image 1 API"""
+        """Generate a marketing image using OpenAI API"""
         try:
             logger.info(f"Generating marketing image for {product_details.get('product_name', 'product')}")
             
@@ -169,39 +180,50 @@ class ImageGenerator:
             else:
                 prompt = PromptTemplates.get_master_template(product_details)
             
-            # Open and read the product image
-            with open(product_image_path, "rb") as img_file:
-                # Use the edit endpoint to combine the product image with our marketing prompt
-                result = self.client.images.edit(
-                    model="gpt-image-1",
-                    image=img_file,
-                    prompt=prompt,
-                    size="1024x1024",
-                    quality="low"  # Changed to low for testing
-                )
-            
-            # If no image in result, generate from scratch with the prompt
-            if not result.data or not result.data[0].b64_json:
-                logger.warning("No image returned from edit endpoint, trying generation endpoint")
-                result = self.client.images.generate(
-                    model="gpt-image-1",
-                    prompt=prompt,
-                    size="1024x1024",
-                    quality="low"  # Changed to low for testing
-                )
-            
-            # Get the generated image
-            if result.data and result.data[0].b64_json:
-                image_base64 = result.data[0].b64_json
-                
+            # Generate the image
+            try:
+                if self.openai_version == "new":
+                    # Using newer OpenAI client
+                    result = self.client.images.generate(
+                        model="dall-e-3",
+                        prompt=prompt,
+                        size="1024x1024",
+                        quality="standard",
+                        n=1
+                    )
+                    
+                    if hasattr(result.data[0], 'url'):
+                        image_url = result.data[0].url
+                        response = requests.get(image_url)
+                        image_bytes = response.content
+                    else:
+                        image_bytes = base64.b64decode(result.data[0].b64_json)
+                else:
+                    # Using legacy OpenAI API
+                    result = self.client.Image.create(
+                        prompt=prompt,
+                        n=1,
+                        size="1024x1024"
+                    )
+                    
+                    if 'data' in result and len(result['data']) > 0:
+                        if 'url' in result['data'][0]:
+                            image_url = result['data'][0]['url']
+                            response = requests.get(image_url)
+                            image_bytes = response.content
+                        elif 'b64_json' in result['data'][0]:
+                            image_bytes = base64.b64decode(result['data'][0]['b64_json'])
+                    else:
+                        logger.error("No image data in response")
+                        return None
+                    
                 # Save the image
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
                 product_name_safe = product_details.get('product_name', 'product').replace(' ', '_')[:20]
                 output_filename = f"{product_name_safe}_{timestamp}.png"
                 output_path = os.path.join("images/output", output_filename)
                 
-                # Convert base64 to image
-                image_bytes = base64.b64decode(image_base64)
+                # Convert to image
                 image = Image.open(BytesIO(image_bytes))
                 
                 # Optionally resize for optimization
@@ -213,9 +235,58 @@ class ImageGenerator:
                 
                 logger.info(f"Marketing image saved to {output_path}")
                 return output_path
-            else:
-                logger.error("No image data in API response")
-                return None
+                
+            except Exception as api_error:
+                logger.error(f"API Error: {str(api_error)}")
+                
+                # Fallback to simpler generation
+                try:
+                    logger.info("Trying fallback generation method")
+                    if self.openai_version == "new":
+                        result = self.client.images.generate(
+                            model="dall-e-2",
+                            prompt=prompt,
+                            size="1024x1024",
+                            n=1
+                        )
+                    else:
+                        result = self.client.Image.create(
+                            prompt=prompt,
+                            n=1,
+                            size="1024x1024"
+                        )
+                    
+                    # Process the response (same as above)
+                    image_bytes = None
+                    if self.openai_version == "new":
+                        if hasattr(result.data[0], 'url'):
+                            response = requests.get(result.data[0].url)
+                            image_bytes = response.content
+                        else:
+                            image_bytes = base64.b64decode(result.data[0].b64_json)
+                    else:
+                        if 'data' in result and len(result['data']) > 0:
+                            if 'url' in result['data'][0]:
+                                response = requests.get(result['data'][0]['url'])
+                                image_bytes = response.content
+                            elif 'b64_json' in result['data'][0]:
+                                image_bytes = base64.b64decode(result['data'][0]['b64_json'])
+                    
+                    if not image_bytes:
+                        return None
+                    
+                    # Save the image
+                    image = Image.open(BytesIO(image_bytes))
+                    if image.size[0] > 1500 or image.size[1] > 1500:
+                        image.thumbnail((1500, 1500), Image.LANCZOS)
+                    image.save(output_path, format="PNG", optimize=True)
+                    
+                    logger.info(f"Marketing image saved to {output_path} (fallback method)")
+                    return output_path
+                    
+                except Exception as fallback_error:
+                    logger.error(f"Fallback generation failed: {str(fallback_error)}")
+                    return None
                 
         except Exception as e:
             logger.error(f"Error generating marketing image: {str(e)}")
