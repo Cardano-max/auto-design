@@ -734,6 +734,124 @@ class WaAPIClient:
         self.max_reconnect_attempts = 5
         logger.info("WaAPIClient initialized successfully")
 
+    def _check_rate_limit(self) -> bool:
+        """Check if we're rate limited and wait if necessary"""
+        current_time = time.time()
+        
+        # Reset counter if window has passed
+        if current_time - self.rate_limit_start > self.rate_limit_window:
+            self.rate_limit_count = 0
+            self.rate_limit_start = current_time
+            return True
+            
+        # Check if we're rate limited
+        if self.rate_limit_count >= self.rate_limit_max:
+            wait_time = self.rate_limit_window - (current_time - self.rate_limit_start)
+            if wait_time > 0:
+                logger.warning(f"Rate limit reached, waiting {wait_time:.2f} seconds")
+                time.sleep(wait_time)
+                self.rate_limit_count = 0
+                self.rate_limit_start = time.time()
+            return True
+            
+        return False
+
+    def _make_request(self, method: str, endpoint: str, data: Dict = None, retry: bool = True) -> Dict:
+        """Make a request to the WaAPI API with improved rate limiting and error handling"""
+        url = f"{self.api_base_url}/{endpoint}"
+        logger.info(f"Making {method} request to {endpoint}")
+        
+        # Check rate limit before making request
+        if self._check_rate_limit():
+            logger.warning("Request delayed due to rate limiting")
+        
+        # Implement retries with exponential backoff
+        max_retries = self.max_retries if retry else 1
+        retry_count = 0
+        current_delay = self.retry_delay
+        
+        while retry_count < max_retries:
+            try:
+                # Prepare request based on method
+                if method.lower() == "get":
+                    response = requests.get(url, headers=self.headers, timeout=30)
+                elif method.lower() == "post":
+                    logger.debug(f"POST data: {json.dumps(data) if data else 'None'}")
+                    response = requests.post(url, headers=self.headers, json=data, timeout=30)
+                elif method.lower() == "put":
+                    response = requests.put(url, headers=self.headers, json=data, timeout=30)
+                elif method.lower() == "delete":
+                    response = requests.delete(url, headers=self.headers, timeout=30)
+                else:
+                    logger.error(f"Invalid method: {method}")
+                    return {"success": False, "error": "Invalid method"}
+                
+                # Check for HTTP errors
+                response.raise_for_status()
+                
+                # Increment rate limit counter
+                self.rate_limit_count += 1
+                
+                # Handle empty responses
+                if not response.text.strip():
+                    logger.warning(f"Empty response received from {endpoint}")
+                    return {"success": False, "error": "Empty response from API"}
+                
+                # Try to parse JSON response
+                try:
+                    result = response.json()
+                except json.JSONDecodeError as json_err:
+                    logger.error(f"JSON parsing error: {str(json_err)}")
+                    logger.error(f"Response content: {response.text[:500]}")
+                    return {"success": False, "error": f"Invalid JSON response: {str(json_err)}"}
+                
+                logger.debug(f"Response: {json.dumps(result)}")
+                return result
+                
+            except requests.exceptions.Timeout:
+                logger.warning(f"Request timeout to {endpoint}, retry {retry_count+1}/{max_retries}")
+                retry_count += 1
+                if retry_count < max_retries:
+                    time.sleep(current_delay)
+                    current_delay *= self.rate_limit_backoff
+                
+            except requests.exceptions.HTTPError as http_err:
+                if response.status_code == 429:  # Rate limiting
+                    logger.warning(f"Rate limited by API (429). Retry {retry_count+1}/{max_retries}")
+                    # Update rate limit tracking with exponential backoff
+                    self.rate_limit_count = self.rate_limit_max
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        time.sleep(current_delay)
+                        current_delay *= self.rate_limit_backoff
+                elif response.status_code >= 500:  # Server errors
+                    logger.warning(f"Server error: {response.status_code}. Retry {retry_count+1}/{max_retries}")
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        time.sleep(current_delay)
+                        current_delay *= self.rate_limit_backoff
+                else:
+                    logger.error(f"HTTP error: {http_err}")
+                    return {"success": False, "error": f"HTTP error: {http_err}"}
+                    
+            except requests.exceptions.RequestException as e:
+                if retry_count + 1 < max_retries:
+                    logger.warning(f"Request error: {str(e)}, retry {retry_count+1}/{max_retries}")
+                    retry_count += 1
+                    time.sleep(current_delay)
+                    current_delay *= self.rate_limit_backoff
+                else:
+                    logger.error(f"Request failed after {max_retries} attempts: {str(e)}")
+                    return {"success": False, "error": str(e)}
+                    
+            except Exception as e:
+                logger.error(f"Unexpected error making request to WaAPI: {str(e)}")
+                logger.error(traceback.format_exc())
+                return {"success": False, "error": str(e)}
+        
+        # If we've exhausted all retries
+        return {"success": False, "error": "Request failed after multiple attempts"}
+
     def get_instance_status(self) -> Dict:
         """Get the status of the instance with caching and reconnection attempts"""
         current_time = time.time()
