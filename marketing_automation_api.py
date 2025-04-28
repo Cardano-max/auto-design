@@ -63,6 +63,7 @@ last_message_time = {}
 
 # Initialize OpenAI with error handling
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+OPENAI_VERSION = "1.55.3"  # Match the version in requirements.txt
 openai_client = None
 
 if not OPENAI_API_KEY:
@@ -460,6 +461,7 @@ class ImageGenerator:
         logger.info("Initializing ImageGenerator")
         self.api_key = api_key
         self.client = openai_client
+        self.openai_version = OPENAI_VERSION  # Add the version attribute
         self.max_retries = 3
         self.retry_delay = 5  # seconds
         logger.info("ImageGenerator initialized with OpenAI API")
