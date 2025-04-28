@@ -721,16 +721,19 @@ class WaAPIClient:
         self.rate_limit_window = 60  # seconds
         self.rate_limit_count = 0
         self.rate_limit_start = time.time()
+        self.rate_limit_max = 20  # Reduced from 30 to be more conservative
+        self.rate_limit_backoff = 1.5  # Exponential backoff factor
         logger.info("WaAPIClient initialized successfully")
     
     def _make_request(self, method: str, endpoint: str, data: Dict = None, retry: bool = True) -> Dict:
-        """Make a request to the WaAPI API with comprehensive error handling"""
+        """Make a request to the WaAPI API with improved rate limiting"""
         url = f"{self.api_base_url}/{endpoint}"
         logger.info(f"Making {method} request to {endpoint}")
         
-        # Implement retries
+        # Implement retries with exponential backoff
         max_retries = self.max_retries if retry else 1
         retry_count = 0
+        current_delay = self.retry_delay
         
         while retry_count < max_retries:
             try:
@@ -741,8 +744,8 @@ class WaAPIClient:
                     self.rate_limit_count = 0
                     self.rate_limit_start = current_time
                 
-                # If we're rate limited, wait
-                if self.rate_limit_count >= 30:  # 30 requests per minute
+                # If we're rate limited, wait with exponential backoff
+                if self.rate_limit_count >= self.rate_limit_max:
                     wait_time = self.rate_limit_window - (current_time - self.rate_limit_start)
                     if wait_time > 0:
                         logger.warning(f"Rate limit reached, waiting {wait_time:.2f} seconds")
@@ -790,21 +793,24 @@ class WaAPIClient:
                 logger.warning(f"Request timeout to {endpoint}, retry {retry_count+1}/{max_retries}")
                 retry_count += 1
                 if retry_count < max_retries:
-                    time.sleep(self.retry_delay)
+                    time.sleep(current_delay)
+                    current_delay *= self.rate_limit_backoff
                 
             except requests.exceptions.HTTPError as http_err:
                 if response.status_code == 429:  # Rate limiting
                     logger.warning(f"Rate limited by API (429). Retry {retry_count+1}/{max_retries}")
-                    # Update rate limit tracking
-                    self.rate_limit_count = 30  # Set to max to trigger wait
+                    # Update rate limit tracking with exponential backoff
+                    self.rate_limit_count = self.rate_limit_max
                     retry_count += 1
                     if retry_count < max_retries:
-                        time.sleep(self.retry_delay * 2)  # Wait longer for rate limits
+                        time.sleep(current_delay)
+                        current_delay *= self.rate_limit_backoff
                 elif response.status_code >= 500:  # Server errors
                     logger.warning(f"Server error: {response.status_code}. Retry {retry_count+1}/{max_retries}")
                     retry_count += 1
                     if retry_count < max_retries:
-                        time.sleep(self.retry_delay)
+                        time.sleep(current_delay)
+                        current_delay *= self.rate_limit_backoff
                 else:
                     logger.error(f"HTTP error: {http_err}")
                     return {"success": False, "error": f"HTTP error: {http_err}"}
@@ -813,7 +819,8 @@ class WaAPIClient:
                 if retry_count + 1 < max_retries:
                     logger.warning(f"Request error: {str(e)}, retry {retry_count+1}/{max_retries}")
                     retry_count += 1
-                    time.sleep(self.retry_delay)
+                    time.sleep(current_delay)
+                    current_delay *= self.rate_limit_backoff
                 else:
                     logger.error(f"Request failed after {max_retries} attempts: {str(e)}")
                     return {"success": False, "error": str(e)}
@@ -1327,12 +1334,20 @@ def update_session(user_id: str, updates: Dict) -> Dict:
             new_state = updates['state']
             
             valid_transitions = {
-                'waiting_for_command': ['waiting_for_image'],
-                'waiting_for_image': ['waiting_for_details'],
-                'waiting_for_details': ['generating_image', 'waiting_for_command'],
+                'waiting_for_command': ['waiting_for_image', 'waiting_for_details'],
+                'waiting_for_image': ['waiting_for_details', 'waiting_for_command'],
+                'waiting_for_details': ['generating_image', 'waiting_for_command', 'waiting_for_image'],
                 'generating_image': ['delivering_image', 'waiting_for_command'],
                 'delivering_image': ['waiting_for_command']
             }
+            
+            # Special case: 'edit' command can reset to waiting_for_image from any state
+            if new_state == 'waiting_for_image' and updates.get('command') == 'edit':
+                logger.info(f"Resetting session to waiting_for_image due to edit command")
+                session['state'] = 'waiting_for_image'
+                session['product_image'] = None
+                session['details'] = {}
+                return session
             
             if current_state in valid_transitions and new_state not in valid_transitions[current_state]:
                 logger.warning(f"Invalid state transition from {current_state} to {new_state}")
