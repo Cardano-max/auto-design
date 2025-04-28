@@ -1480,8 +1480,9 @@ def handle_text_message(from_number: str, text: str):
         
         # Get or create user session
         session = get_session(from_number)
+        logger.info(f"[{message_id}] Current session state: {session.get('state')}")
         
-        # Add to message history (limited to last 10 messages)
+        # Add to message history
         history_entry = {"time": datetime.now().timestamp(), "type": "text", "content": text}
         session["history"] = (session.get("history", []) + [history_entry])[-10:]
         
@@ -1497,122 +1498,53 @@ def handle_text_message(from_number: str, text: str):
                 'details': {}
             })
             
-            marketing_bot.waapi_client.send_message(
+            response = marketing_bot.waapi_client.send_message(
                 from_number,
                 "Welcome to Marketing Image Editor! 📸\n\n"
                 "Please send your product image to begin.\n\n"
                 "After sending the image, I'll ask for details like company name, product name, price, etc."
             )
-            logger.info(f"[{message_id}] Sent welcome message to {from_number}")
-            return
-        
-        # Handle 'help' command
-        if text_lower == 'help':
-            logger.info(f"[{message_id}] User {from_number} requested help")
             
-            help_message = (
-                "📖 *Marketing Image Generator Help*\n\n"
-                "*Available Commands:*\n"
-                "• *edit* - Start creating a new marketing image\n"
-                "• *generate* - Generate the image after providing details\n"
-                "• *help* - Show this help message\n"
-                "• *status* - Check your current session status\n"
-                "• *reset* - Reset your session\n\n"
-                "*How to use:*\n"
-                "1. Send 'edit' to start\n"
-                "2. Send a product image\n"
-                "3. Provide product details as requested\n"
-                "4. Send 'generate' to create your image\n\n"
-                "Need more help? Contact support."
-            )
-            
-            marketing_bot.waapi_client.send_message(from_number, help_message)
-            return
-        
-        # Handle 'status' command
-        if text_lower == 'status':
-            logger.info(f"[{message_id}] User {from_number} requested status")
-            
-            status_message = "📊 *Session Status*\n\n"
-            status_message += f"Current state: {session.get('state', 'Not started')}\n"
-            
-            if session.get('product_image'):
-                status_message += "✅ Product image: Received\n"
+            if response.get('success'):
+                logger.info(f"[{message_id}] Successfully sent welcome message to {from_number}")
             else:
-                status_message += "❌ Product image: Not received\n"
+                logger.error(f"[{message_id}] Failed to send welcome message: {response.get('error')}")
             
-            # Details summary
-            details = session.get('details', {})
-            status_message += "\n*Product Details:*\n"
-            status_message += f"• Company: {details.get('company_name', '❌ Not provided')}\n"
-            status_message += f"• Product: {details.get('product_name', '❌ Not provided')}\n"
-            status_message += f"• Price: {details.get('price', '❌ Not provided')}\n"
-            status_message += f"• Tagline: {details.get('tagline', '➖ Optional')}\n"
-            status_message += f"• Address: {details.get('address', '➖ Optional')}\n\n"
-            
-            if session.get('state') == 'waiting_for_command':
-                status_message += "To start a new image, send 'edit'."
-            elif session.get('state') == 'waiting_for_image':
-                status_message += "I'm waiting for you to send a product image."
-            elif session.get('state') == 'waiting_for_details':
-                if all([details.get('company_name'), details.get('product_name'), details.get('price')]):
-                    status_message += "Ready to generate! Send 'generate' to create your marketing image."
-                else:
-                    status_message += "Please provide the remaining required details."
-            
-            marketing_bot.waapi_client.send_message(from_number, status_message)
-            return
-        
-        # Handle 'reset' command
-        if text_lower == 'reset':
-            logger.info(f"[{message_id}] User {from_number} is resetting their session")
-            update_session(from_number, {
-                'state': 'waiting_for_command',
-                'product_image': None,
-                'details': {}
-            })
-            
-            marketing_bot.waapi_client.send_message(
-                from_number,
-                "✅ Your session has been reset.\n\n"
-                "To start creating a marketing image, send 'edit'."
-            )
             return
         
         # Handle 'generate' command
-        if text_lower == 'generate':
+        elif text_lower == 'generate':
             logger.info(f"[{message_id}] User {from_number} sent 'generate' command")
             
-            # Verify we're in the right state and have all required info
+            # Check if we have all required information
             if session.get('state') != 'waiting_for_details':
-                logger.warning(f"[{message_id}] User tried to generate in wrong state: {session.get('state')}")
                 marketing_bot.waapi_client.send_message(
                     from_number,
-                    "You're not ready to generate an image yet.\n\n" +
-                    ("Please send 'edit' to start the process." if session.get('state') == 'waiting_for_command' else
-                     "Please send a product image first." if session.get('state') == 'waiting_for_image' else
-                     "Please complete providing product details first.")
+                    "❌ You need to provide all required details first.\n\n"
+                    "Please send the following information:\n"
+                    "1. Company name\n"
+                    "2. Product name\n"
+                    "3. Price\n"
+                    "4. Tagline (optional)\n"
+                    "5. Address (optional)"
                 )
                 return
             
-            # Check for product image
-            if not session.get('product_image') or not os.path.exists(session.get('product_image')):
-                logger.warning(f"[{message_id}] User tried to generate without valid image")
+            # Verify we have an image
+            if not session.get('product_image'):
                 marketing_bot.waapi_client.send_message(
                     from_number,
-                    "❌ Product image not found or invalid.\n\n"
-                    "Please start over by sending 'edit'."
+                    "❌ No product image found. Please start over by sending 'edit'."
                 )
                 return
             
-            # Check for required details
+            # Verify we have required details
             details = session.get('details', {})
             required_fields = ['company_name', 'product_name', 'price']
-            missing = [field.replace('_', ' ').title() for field in required_fields if not details.get(field)]
+            missing_fields = [field for field in required_fields if not details.get(field)]
             
-            if missing:
-                logger.warning(f"[{message_id}] User tried to generate with missing details: {missing}")
-                missing_text = ', '.join(missing)
+            if missing_fields:
+                missing_text = ', '.join(missing_fields)
                 marketing_bot.waapi_client.send_message(
                     from_number,
                     f"❌ Missing required details: {missing_text}\n\n"
@@ -1620,55 +1552,28 @@ def handle_text_message(from_number: str, text: str):
                 )
                 return
             
-            # All checks passed - now generate the image
-            logger.info(f"[{message_id}] All validation passed, sending generation message")
-            
-            # Send generation in progress message
-            sent = marketing_bot.waapi_client.send_message(
+            # All checks passed - start generation
+            marketing_bot.waapi_client.send_message(
                 from_number,
                 "✨ Generating your marketing image...\n\n"
                 "This may take up to 30 seconds. Please wait."
             )
             
-            if not sent.get('success'):
-                logger.error(f"[{message_id}] Failed to send generation message: {sent.get('error')}")
-                # Continue anyway - the generation might still work
-            
-            # Determine product type from name if possible
-            product_name = details.get('product_name', '').lower()
-            product_type = "product"  # Default
-            
-            if any(term in product_name for term in ['coffee', 'tea', 'drink', 'juice', 'smoothie', 'latte']):
-                product_type = "beverage"
-            elif any(term in product_name for term in ['food', 'meal', 'dish', 'burger', 'sandwich', 'pizza']):
-                product_type = "food"
-            
-            logger.info(f"[{message_id}] Determined product type: {product_type}")
-            
             # Process the request
-            logger.info(f"[{message_id}] Starting image generation process")
             result = marketing_bot.process_request(
                 from_number,
                 session.get('product_image'),
-                details,
-                product_type
+                details
             )
             
             if result.get('success'):
-                logger.info(f"[{message_id}] Image generated successfully: {result.get('image_path')}")
-                
-                # Get image path
+                # Send the generated image
                 image_path = result.get('image_path')
-                
-                # Read the image for base64 encoding
-                logger.info(f"[{message_id}] Reading image file for base64 encoding")
                 try:
                     with open(image_path, 'rb') as img_file:
                         img_data = img_file.read()
                         img_base64 = base64.b64encode(img_data).decode('utf-8')
                     
-                    # Send the generated image
-                    logger.info(f"[{message_id}] Sending generated image to {from_number}")
                     media_result = marketing_bot.waapi_client.send_media(
                         from_number,
                         "🎉 Here's your marketing image!\n\n"
@@ -1679,46 +1584,19 @@ def handle_text_message(from_number: str, text: str):
                     
                     if media_result.get('success'):
                         logger.info(f"[{message_id}] Image sent successfully")
+                        update_session(from_number, {'state': 'waiting_for_command'})
                     else:
                         logger.error(f"[{message_id}] Failed to send image: {media_result.get('error')}")
-                        
-                        # Try alternate approach - send image URL if available
-                        if result.get('image_url'):
-                            logger.info(f"[{message_id}] Trying to send image URL as fallback")
-                            marketing_bot.waapi_client.send_message(
-                                from_number,
-                                f"I created your marketing image but couldn't send it directly.\n\n"
-                                f"You can view and download it here:\n{result.get('image_url')}\n\n"
-                                f"To create another image, send 'edit' again."
-                            )
-                        else:
-                            # Last resort - just send error
-                            marketing_bot.waapi_client.send_message(
-                                from_number,
-                                "I created your marketing image but couldn't send it. Please try again by sending 'edit'."
-                            )
-                    
-                except Exception as file_error:
-                    logger.error(f"[{message_id}] Error reading or sending image file: {str(file_error)}")
-                    logger.error(traceback.format_exc())
-                    
-                    # Try to send image URL as fallback
-                    if result.get('image_url'):
                         marketing_bot.waapi_client.send_message(
                             from_number,
-                            f"I created your marketing image but encountered an error sending it.\n\n"
-                            f"You can view and download it here:\n{result.get('image_url')}\n\n"
-                            f"To create another image, send 'edit' again."
+                            "I created your marketing image but couldn't send it. Please try again by sending 'edit'."
                         )
-                    else:
-                        marketing_bot.waapi_client.send_message(
-                            from_number,
-                            "I created your marketing image but encountered an error. Please try again by sending 'edit'."
-                        )
-                
-                # Reset state regardless of send success
-                update_session(from_number, {'state': 'waiting_for_command'})
-                logger.info(f"[{message_id}] Session state reset to 'waiting_for_command'")
+                except Exception as e:
+                    logger.error(f"[{message_id}] Error sending image: {str(e)}")
+                    marketing_bot.waapi_client.send_message(
+                        from_number,
+                        "Sorry, there was an error sending the image. Please try again by sending 'edit'."
+                    )
             else:
                 logger.error(f"[{message_id}] Failed to generate image: {result.get('error')}")
                 marketing_bot.waapi_client.send_message(
@@ -1728,21 +1606,11 @@ def handle_text_message(from_number: str, text: str):
                 )
             return
         
-        # Handle conversation flow based on state
-        if session['state'] == 'waiting_for_image':
-            logger.info(f"[{message_id}] User sent text while waiting for image")
-            marketing_bot.waapi_client.send_message(
-                from_number,
-                "I'm waiting for you to send a product image.\n\n"
-                "Please send an image file, not text."
-            )
-            return
-        
-        elif session['state'] == 'waiting_for_details':
-            logger.info(f"[{message_id}] User {from_number} sent details: {text}")
+        # Handle details input
+        elif session.get('state') == 'waiting_for_details':
+            logger.info(f"[{message_id}] Processing details from {from_number}: {text}")
             
             # Parse the details
-            detail_provided = False
             details = session.get('details', {})
             
             # Try structured format first (key: value pairs)
@@ -1755,74 +1623,61 @@ def handle_text_message(from_number: str, text: str):
                     
                     if 'company' in key:
                         details['company_name'] = value
-                        detail_provided = True
-                        logger.info(f"[{message_id}] Set company_name: {value}")
                     elif 'product' in key:
                         details['product_name'] = value
-                        detail_provided = True
-                        logger.info(f"[{message_id}] Set product_name: {value}")
                     elif 'price' in key:
                         details['price'] = value
-                        detail_provided = True
-                        logger.info(f"[{message_id}] Set price: {value}")
                     elif 'tagline' in key:
                         details['tagline'] = value
-                        detail_provided = True
-                        logger.info(f"[{message_id}] Set tagline: {value}")
                     elif 'address' in key or 'location' in key:
                         details['address'] = value
-                        detail_provided = True
-                        logger.info(f"[{message_id}] Set address: {value}")
             
             # If no structured details, interpret as single value in sequence
-            if not detail_provided:
-                logger.info(f"[{message_id}] No structured details found, interpreting as single value")
-                
+            if not any(details.values()):
                 if not details.get('company_name'):
                     details['company_name'] = text
-                    logger.info(f"[{message_id}] Set company_name: {text}")
                 elif not details.get('product_name'):
                     details['product_name'] = text
-                    logger.info(f"[{message_id}] Set product_name: {text}")
                 elif not details.get('price'):
                     details['price'] = text
-                    logger.info(f"[{message_id}] Set price: {text}")
                 elif not details.get('tagline'):
                     details['tagline'] = text
-                    logger.info(f"[{message_id}] Set tagline: {text}")
                 elif not details.get('address'):
                     details['address'] = text
-                    logger.info(f"[{message_id}] Set address: {text}")
-                else:
-                    # All fields already filled, update the last field (address)
-                    details['address'] = text
-                    logger.info(f"[{message_id}] Updated address: {text}")
             
             # Update session with new details
             update_session(from_number, {'details': details})
             
-            # Send updated status and next step
-            logger.info(f"[{message_id}] Sending status update to {from_number}")
-            status_msg = "📝 Current details:\n\n"
-            status_msg += f"Company: {details.get('company_name', '❌')}\n"
-            status_msg += f"Product: {details.get('product_name', '❌')}\n"
-            status_msg += f"Price: {details.get('price', '❌')}\n"
-            status_msg += f"Tagline: {details.get('tagline', '➖')}\n"
-            status_msg += f"Address: {details.get('address', '➖')}\n\n"
-            
             # Check what's still needed
-            if not details.get('company_name'):
-                status_msg += "👉 Please send your company name.\n"
-            elif not details.get('product_name'):
-                status_msg += "👉 Please send your product name.\n"
-            elif not details.get('price'):
-                status_msg += "👉 Please send the price.\n"
-            else:
-                status_msg += "✅ All required information received!\n\n"
-                status_msg += "To generate the marketing image, send 'generate'\n"
-                status_msg += "To add optional details (tagline, address), just send them."
+            required_fields = ['company_name', 'product_name', 'price']
+            missing_fields = [field for field in required_fields if not details.get(field)]
             
-            marketing_bot.waapi_client.send_message(from_number, status_msg)
+            if missing_fields:
+                missing_text = ', '.join(missing_fields)
+                marketing_bot.waapi_client.send_message(
+                    from_number,
+                    f"📝 Current details:\n\n"
+                    f"Company: {details.get('company_name', '❌')}\n"
+                    f"Product: {details.get('product_name', '❌')}\n"
+                    f"Price: {details.get('price', '❌')}\n"
+                    f"Tagline: {details.get('tagline', '➖')}\n"
+                    f"Address: {details.get('address', '➖')}\n\n"
+                    f"Still needed: {missing_text}\n\n"
+                    f"Please provide the missing information."
+                )
+            else:
+                marketing_bot.waapi_client.send_message(
+                    from_number,
+                    f"✅ All required information received!\n\n"
+                    f"Current details:\n\n"
+                    f"Company: {details.get('company_name')}\n"
+                    f"Product: {details.get('product_name')}\n"
+                    f"Price: {details.get('price')}\n"
+                    f"Tagline: {details.get('tagline', '➖')}\n"
+                    f"Address: {details.get('address', '➖')}\n\n"
+                    f"To generate the marketing image, send 'generate'\n"
+                    f"To modify any details, just send them again."
+                )
             return
         
         # Default state - waiting for command
@@ -1857,125 +1712,45 @@ def handle_image_message(from_number: str, media_data):
         # Get or create user session
         session = get_session(from_number)
         
-        # Add to message history
-        history_entry = {"time": datetime.now().timestamp(), "type": "image"}
-        session["history"] = (session.get("history", []) + [history_entry])[-10:]
-        
-        # Debug session state
-        logger.info(f"[{message_id}] Current session state: {session.get('state')}")
-        
         # Check if we're in the right state to receive an image
         if session.get('state') != 'waiting_for_image':
-            logger.warning(f"[{message_id}] Received image but session state is {session.get('state')}, not waiting_for_image")
+            logger.warning(f"[{message_id}] Received image but session state is {session.get('state')}")
             marketing_bot.waapi_client.send_message(
                 from_number,
-                "I wasn't expecting an image right now.\n\n" +
-                ("To start the process, please send 'edit' first." if session.get('state') == 'waiting_for_command' else
-                 "I already have your image. Please provide the product details." if session.get('state') == 'waiting_for_details' else
-                 "Please send 'edit' to start over.")
+                "I wasn't expecting an image right now.\n\n"
+                "To start the process, please send 'edit' first."
             )
             return
         
         # Process the image
         try:
-            # Try to extract image data in various formats
+            # Extract image data
             image_bytes = None
+            if isinstance(media_data, dict):
+                if 'data' in media_data:
+                    image_bytes = base64.b64decode(media_data['data'])
+                elif 'base64' in media_data:
+                    image_bytes = base64.b64decode(media_data['base64'])
+                elif 'url' in media_data:
+                    response = requests.get(media_data['url'], timeout=30)
+                    if response.status_code == 200:
+                        image_bytes = response.content
             
-            if media_data:
-                # Try various media data formats
-                if isinstance(media_data, dict):
-                    if 'data' in media_data and media_data['data']:
-                        logger.info(f"[{message_id}] Found base64 data in media_data['data']")
-                        try:
-                            image_bytes = base64.b64decode(media_data['data'])
-                        except Exception as b64_err:
-                            logger.error(f"[{message_id}] Base64 decode error: {str(b64_err)}")
-                    
-                    elif 'base64' in media_data and media_data['base64']:
-                        logger.info(f"[{message_id}] Found base64 data in media_data['base64']")
-                        try:
-                            image_bytes = base64.b64decode(media_data['base64'])
-                        except Exception as b64_err:
-                            logger.error(f"[{message_id}] Base64 decode error: {str(b64_err)}")
-                            
-                    elif 'url' in media_data and media_data['url']:
-                        logger.info(f"[{message_id}] Found URL in media_data['url']")
-                        try:
-                            response = requests.get(media_data['url'], timeout=30)
-                            if response.status_code == 200:
-                                image_bytes = response.content
-                            else:
-                                logger.error(f"[{message_id}] Failed to download image: HTTP {response.status_code}")
-                        except Exception as url_err:
-                            logger.error(f"[{message_id}] URL download error: {str(url_err)}")
-                
-                elif isinstance(media_data, str) and (len(media_data) > 100):
-                    # Try to interpret as direct base64 string
-                    logger.info(f"[{message_id}] Attempting to parse media_data as direct base64 string")
-                    try:
-                        image_bytes = base64.b64decode(media_data)
-                    except Exception as direct_b64_err:
-                        logger.error(f"[{message_id}] Direct base64 decode error: {str(direct_b64_err)}")
-            
-            # If we couldn't extract image data, use placeholder
             if not image_bytes:
-                logger.warning(f"[{message_id}] Couldn't extract image data, using placeholder")
-                
-                # Create placeholder image
-                img_buffer = ImageProcessor.create_placeholder_image(512, 512)
-                image_bytes = img_buffer.getvalue()
-                
-                # Inform the user
+                logger.warning(f"[{message_id}] Couldn't extract image data")
                 marketing_bot.waapi_client.send_message(
                     from_number,
-                    "⚠️ I received your image but couldn't access its data due to API limitations.\n\n"
-                    "I'll continue with a placeholder image for testing. In production, your actual image would be used."
-                )
-            
-            # Validate image data before saving
-            try:
-                img = Image.open(BytesIO(image_bytes))
-                width, height = img.size
-                format = img.format
-                logger.info(f"[{message_id}] Image validated: {width}x{height} {format}")
-            except Exception as validate_err:
-                logger.error(f"[{message_id}] Invalid image data: {str(validate_err)}")
-                marketing_bot.waapi_client.send_message(
-                    from_number,
-                    "❌ The image you sent appears to be invalid or corrupted.\n\n"
-                    "Please try sending a different image."
+                    "❌ I couldn't process your image. Please try sending it again."
                 )
                 return
             
             # Save the image
             timestamp = generate_timestamp()
-            safe_number = from_number.replace('@c.us', '').replace('+', '')
-            filename = f"whatsapp_image_{safe_number}_{timestamp}.jpg"
+            filename = f"whatsapp_image_{from_number}_{timestamp}.jpg"
             image_path = os.path.join("images/input", filename)
             
-            logger.info(f"[{message_id}] Saving image to {image_path}")
             with open(image_path, 'wb') as f:
                 f.write(image_bytes)
-            
-            # Verify the file was saved correctly
-            if not os.path.exists(image_path):
-                logger.error(f"[{message_id}] Failed to save image at {image_path}")
-                marketing_bot.waapi_client.send_message(
-                    from_number,
-                    "❌ There was an error saving your image. Please try again."
-                )
-                return
-                
-            file_size = os.path.getsize(image_path)
-            if file_size < 100:  # Extremely small file, likely corrupt
-                logger.error(f"[{message_id}] Saved image is too small ({file_size} bytes), likely corrupt")
-                marketing_bot.waapi_client.send_message(
-                    from_number,
-                    "❌ The saved image appears to be invalid. Please try sending a different image."
-                )
-                return
-            
-            logger.info(f"[{message_id}] Image saved to {image_path} ({file_size} bytes)")
             
             # Update session with image path and change state
             update_session(from_number, {
@@ -1988,19 +1763,17 @@ def handle_image_message(from_number: str, media_data):
                 from_number,
                 "✅ Product image received!\n\n"
                 "Now please provide the following details:\n\n"
-                "1️⃣ Company name\n"
-                "2️⃣ Product name\n"
-                "3️⃣ Price\n"
-                "4️⃣ Tagline (optional)\n"
-                "5️⃣ Address (optional)\n\n"
+                "1. Company name\n"
+                "2. Product name\n"
+                "3. Price\n"
+                "4. Tagline (optional)\n"
+                "5. Address (optional)\n\n"
                 "You can send them one by one or all at once.\n"
                 "Example format:\n"
                 "Company: ABC Corp\n"
                 "Product: Premium Coffee\n"
-                "Price: $20\n\n"
-                "When you're ready to generate the image, send 'generate'"
+                "Price: $20"
             )
-            logger.info(f"[{message_id}] Successfully processed image and sent response")
             
         except Exception as e:
             logger.error(f"[{message_id}] Error processing image: {str(e)}")
