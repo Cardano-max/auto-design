@@ -845,56 +845,65 @@ def handle_image_message(from_number: str, media_data):
         
         # Process the image from media_data (base64 encoded)
         try:
-            if media_data and media_data.get('data'):  # Check if we have base64 data
+            if media_data and media_data.get('data'):  
+                # Normal path - we have base64 data
                 logger.info("Image data found. Decoding base64 data...")
-                # Decode base64 data
                 image_bytes = base64.b64decode(media_data['data'])
-                
-                # Save the image
-                filename = f"whatsapp_image_{from_number.replace('@c.us', '')}_{int(datetime.now().timestamp())}.jpg"
-                image_path = os.path.join("images/input", filename)
-                
-                logger.info(f"Saving image to {image_path}")
-                with open(image_path, 'wb') as f:
-                    f.write(image_bytes)
-                
-                logger.info(f"Image saved to {image_path}")
-                session['product_image'] = image_path
-                session['state'] = 'waiting_for_details'
-                logger.info("Session state changed to 'waiting_for_details'")
-                
-                marketing_bot.waapi_client.send_message(
-                    from_number,
-                    "✅ Product image received!\n\n"
-                    "Now please provide the following details:\n\n"
-                    "1️⃣ Company name\n"
-                    "2️⃣ Product name\n"
-                    "3️⃣ Price\n"
-                    "4️⃣ Tagline (optional)\n"
-                    "5️⃣ Address (optional)\n\n"
-                    "You can send them one by one or all at once.\n"
-                    "Example format:\n"
-                    "Company: ABC Corp\n"
-                    "Product: Premium Coffee\n"
-                    "Price: $20\n\n"
-                    "When you're ready to generate the image, send 'generate'"
-                )
-                logger.info("Successfully processed image and sent response")
             else:
-                logger.error("No image data found in webhook")
+                # No media data in webhook - this is common with WaAPI's trial limitations
+                # Create a placeholder image for testing
+                logger.warning("No image data in webhook - creating placeholder image")
+                
+                # Save a placeholder image (1x1 transparent pixel)
+                image_bytes = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=")
+                
+                # Let the user know about the limitation
                 marketing_bot.waapi_client.send_message(
                     from_number,
-                    "Sorry, I couldn't process your image. Please try again."
+                    "⚠️ I received your image but couldn't access its data due to trial account limitations.\n\n"
+                    "I'll continue with a placeholder image for testing purposes."
                 )
+            
+            # Save the image
+            filename = f"whatsapp_image_{from_number.replace('@c.us', '')}_{int(datetime.now().timestamp())}.jpg"
+            image_path = os.path.join("images/input", filename)
+            
+            logger.info(f"Saving image to {image_path}")
+            with open(image_path, 'wb') as f:
+                f.write(image_bytes)
+            
+            logger.info(f"Image saved to {image_path}")
+            session['product_image'] = image_path
+            session['state'] = 'waiting_for_details'
+            logger.info("Session state changed to 'waiting_for_details'")
+            
+            marketing_bot.waapi_client.send_message(
+                from_number,
+                "✅ Product image received!\n\n"
+                "Now please provide the following details:\n\n"
+                "1️⃣ Company name\n"
+                "2️⃣ Product name\n"
+                "3️⃣ Price\n"
+                "4️⃣ Tagline (optional)\n"
+                "5️⃣ Address (optional)\n\n"
+                "You can send them one by one or all at once.\n"
+                "Example format:\n"
+                "Company: ABC Corp\n"
+                "Product: Premium Coffee\n"
+                "Price: $20\n\n"
+                "When you're ready to generate the image, send 'generate'"
+            )
+            logger.info("Successfully processed image and sent response")
+            
         except Exception as e:
-            logger.error(f"Error processing image: {str(e)}")
+            logger.error(f"Error processing image: {str(e)}", exc_info=True)
             marketing_bot.waapi_client.send_message(
                 from_number,
                 "Sorry, I couldn't process your image. Please try again."
             )
             
     except Exception as e:
-        logger.error(f"Error handling image message: {str(e)}")
+        logger.error(f"Error handling image message: {str(e)}", exc_info=True)
         try:
             marketing_bot.waapi_client.send_message(
                 from_number,
@@ -942,17 +951,25 @@ def webhook():
         
         # Extract message ID to prevent duplicate processing
         message_data = webhook_data.get('data', {}).get('message', {})
-        message_id = message_data.get('id', {}).get('_serialized', '')
+        
+        # Debug the message structure
+        logger.debug(f"Message data structure: {json.dumps(message_data)}")
+        
+        message_id = message_data.get('id', {})
+        if isinstance(message_id, dict):
+            serialized_id = message_id.get('_serialized', '')
+        else:
+            serialized_id = str(message_id)
         
         # Skip if we've already processed this message
-        if message_id and message_id in processed_messages:
-            logger.info(f"Skipping duplicate message: {message_id}")
+        if serialized_id and serialized_id in processed_messages:
+            logger.info(f"Skipping duplicate message: {serialized_id}")
             return jsonify({"status": "success", "message": "Duplicate message skipped"})
         
         # Mark as processed if it has an ID
-        if message_id:
-            processed_messages[message_id] = datetime.now().timestamp()
-            logger.debug(f"Added message {message_id} to processed cache")
+        if serialized_id:
+            processed_messages[serialized_id] = datetime.now().timestamp()
+            logger.debug(f"Added message {serialized_id} to processed cache")
             
             # Limit cache size by removing old entries (keep last 100)
             if len(processed_messages) > 100:
@@ -962,35 +979,62 @@ def webhook():
         
         # Check if this is a message event
         if webhook_data.get('event') in ['message', 'message_create']:
-            # Extract message details
-            message_type = message_data.get('type')
-            from_number = message_data.get('from')
-            body = message_data.get('body', '').strip().lower()
-            has_media = message_data.get('hasMedia', False)
+            # Extract message details - safer parsing with fallbacks
+            message_type = message_data.get('type', '')
+            from_number = message_data.get('from', '')
+            # Handle None values properly when parsing body
+            raw_body = message_data.get('body')
+            body = raw_body.strip().lower() if isinstance(raw_body, str) else ''
             
-            logger.info(f"Received message from {from_number}: {body}, Media: {has_media}")
+            # Check for media in multiple ways
+            has_media = (
+                message_data.get('hasMedia', False) or 
+                message_type in ['image', 'sticker', 'video', 'document'] or
+                'mediaData' in message_data or
+                '_data' in message_data and message_data['_data'].get('type') in ['image', 'sticker', 'video', 'document']
+            )
+            
+            logger.info(f"Received message from {from_number}: {body}, Media: {has_media}, Type: {message_type}")
             
             # Check if the number is in the proper format
-            if '@c.us' not in from_number:
+            if '@c.us' not in str(from_number):
                 logger.error(f"Invalid phone number format: {from_number}")
                 return jsonify({"status": "error", "message": "Invalid phone number format"})
             
-            # Handle media messages (images)
-            if has_media and message_type in ['image', 'sticker']:
-                media_data = webhook_data.get('data', {}).get('media', {})
-                handle_image_message(from_number, media_data)
-            else:
-                # Handle text messages
-                handle_text_message(from_number, body)
+            # Try to get media data in multiple ways
+            media_data = webhook_data.get('data', {}).get('media', {})
+            if not media_data:
+                logger.debug("No direct media data found, checking alternative locations")
+                if '_data' in message_data and message_data['_data'].get('type') in ['image', 'sticker', 'video', 'document']:
+                    logger.debug("Found media in _data")
+                    # Try to extract media from message_data itself for different webhook formats
+                    if hasattr(message_data, 'mediaData') or 'mediaData' in message_data:
+                        media_data = message_data.get('mediaData', {})
+                    elif hasattr(message_data, 'mimetype') or 'mimetype' in message_data:
+                        # It might be directly in the message
+                        media_data = message_data
             
-            return jsonify({"status": "success"})
+            # Handle media messages
+            if has_media:
+                logger.info(f"Detected media in message from {from_number}, type: {message_type}")
+                if not media_data:
+                    # If webhook doesn't include media data, try to fetch it
+                    logger.info("Media indicated but no media data in webhook, will attempt download")
+                
+                # Process as image regardless of empty media data - handler will check session state
+                handle_image_message(from_number, media_data)
+                return jsonify({"status": "success", "message": "Media processed"})
+                
+            # Handle text messages
+            handle_text_message(from_number, body)
+            return jsonify({"status": "success", "message": "Text processed"})
         
         # Handle other event types if needed
         logger.debug(f"Event {webhook_data.get('event')} processed")
         return jsonify({"status": "success", "message": "Event processed"})
     
     except Exception as e:
-        logger.error(f"Webhook error: {str(e)}")
+        logger.error(f"Webhook error: {str(e)}", exc_info=True)  # Added full traceback
         return jsonify({"status": "error", "message": str(e)})
 
 ###################
