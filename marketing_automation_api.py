@@ -718,6 +718,9 @@ class WaAPIClient:
         }
         self.max_retries = 3
         self.retry_delay = 2  # seconds
+        self.rate_limit_window = 60  # seconds
+        self.rate_limit_count = 0
+        self.rate_limit_start = time.time()
         logger.info("WaAPIClient initialized successfully")
     
     def _make_request(self, method: str, endpoint: str, data: Dict = None, retry: bool = True) -> Dict:
@@ -731,6 +734,22 @@ class WaAPIClient:
         
         while retry_count < max_retries:
             try:
+                # Check rate limiting
+                current_time = time.time()
+                if current_time - self.rate_limit_start > self.rate_limit_window:
+                    # Reset rate limit counter if window has passed
+                    self.rate_limit_count = 0
+                    self.rate_limit_start = current_time
+                
+                # If we're rate limited, wait
+                if self.rate_limit_count >= 30:  # 30 requests per minute
+                    wait_time = self.rate_limit_window - (current_time - self.rate_limit_start)
+                    if wait_time > 0:
+                        logger.warning(f"Rate limit reached, waiting {wait_time:.2f} seconds")
+                        time.sleep(wait_time)
+                        self.rate_limit_count = 0
+                        self.rate_limit_start = time.time()
+                
                 # Prepare request based on method
                 if method.lower() == "get":
                     response = requests.get(url, headers=self.headers, timeout=30)
@@ -747,6 +766,9 @@ class WaAPIClient:
                 
                 # Check for HTTP errors
                 response.raise_for_status()
+                
+                # Increment rate limit counter
+                self.rate_limit_count += 1
                 
                 # Handle empty responses
                 if not response.text.strip():
@@ -773,6 +795,8 @@ class WaAPIClient:
             except requests.exceptions.HTTPError as http_err:
                 if response.status_code == 429:  # Rate limiting
                     logger.warning(f"Rate limited by API (429). Retry {retry_count+1}/{max_retries}")
+                    # Update rate limit tracking
+                    self.rate_limit_count = 30  # Set to max to trigger wait
                     retry_count += 1
                     if retry_count < max_retries:
                         time.sleep(self.retry_delay * 2)  # Wait longer for rate limits
