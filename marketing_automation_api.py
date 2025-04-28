@@ -62,7 +62,6 @@ last_message_time = {}
 
 # Initialize OpenAI with error handling
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-OPENAI_VERSION = "new"
 openai_client = None
 
 if not OPENAI_API_KEY:
@@ -71,7 +70,13 @@ if not OPENAI_API_KEY:
 
 try:
     from openai import OpenAI
-    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    # Initialize with explicit configuration to avoid proxy issues
+    openai_client = OpenAI(
+        api_key=OPENAI_API_KEY,
+        http_client=None,  # Explicitly set to None to prevent proxy issues
+        timeout=30.0,  # Set a reasonable timeout
+        max_retries=3  # Set retry attempts
+    )
     logger.info("Successfully initialized OpenAI client")
 except Exception as e:
     logger.critical(f"Failed to initialize OpenAI client: {str(e)}")
