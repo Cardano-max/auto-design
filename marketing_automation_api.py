@@ -1028,6 +1028,8 @@ class MarketingBot:
         try:
             self.image_generator = ImageGenerator(openai_key)
             self.waapi_client = WaAPIClient(waapi_token, waapi_instance_id)
+            self.max_retries = 3
+            self.retry_delay = 5  # seconds
             logger.info("MarketingBot initialized with OpenAI and WaAPI")
         except Exception as e:
             logger.critical(f"Failed to initialize MarketingBot: {str(e)}")
@@ -1080,61 +1082,103 @@ class MarketingBot:
                 logger.error(f"[{request_id}] Missing required product details: {fields_str}")
                 return {"success": False, "error": f"Missing required details: {fields_str}"}
             
-            # Auto-detect product type from name if not specified
-            if not product_type or product_type.lower() not in ["beverage", "food", "product"]:
-                product_name = product_details.get('product_name', '').lower()
-                if any(term in product_name for term in ['coffee', 'tea', 'drink', 'juice', 'smoothie', 'latte']):
-                    product_type = "beverage"
-                    logger.info(f"[{request_id}] Auto-detected product type: beverage")
-                elif any(term in product_name for term in ['food', 'meal', 'dish', 'burger', 'sandwich', 'pizza']):
-                    product_type = "food"
-                    logger.info(f"[{request_id}] Auto-detected product type: food")
-                else:
-                    product_type = "product"
-                    logger.info(f"[{request_id}] Using default product type: product")
+            # Update session state to generating
+            update_session(user_id, {'state': 'generating_image'})
             
-            # Generate marketing image
-            logger.info(f"[{request_id}] Starting image generation")
-            output_path = self.image_generator.generate_marketing_image(
-                product_image_path,
-                product_details,
-                product_type
-            )
+            # Attempt image generation with retries
+            for attempt in range(1, self.max_retries + 1):
+                try:
+                    logger.info(f"[{request_id}] Starting image generation attempt {attempt}/{self.max_retries}")
+                    
+                    # Generate image - try DALL-E 3 first
+                    result = self.image_generator.generate_marketing_image(
+                        product_image_path,
+                        product_details,
+                        product_type
+                    )
+                    
+                    if result and result.get('success'):
+                        # Update session state to delivering
+                        update_session(user_id, {'state': 'delivering_image'})
+                        
+                        # Get image path and URL
+                        image_path = result.get('image_path')
+                        image_url = result.get('image_url')
+                        
+                        # Send the image to user
+                        try:
+                            # Read the image for base64 encoding
+                            with open(image_path, 'rb') as img_file:
+                                img_data = img_file.read()
+                                img_base64 = base64.b64encode(img_data).decode('utf-8')
+                            
+                            # Send the generated image
+                            media_result = self.waapi_client.send_media(
+                                user_id,
+                                "🎉 Here's your marketing image!\n\n"
+                                "To create another image, send 'edit' again.",
+                                media_base64=img_base64,
+                                filename=os.path.basename(image_path)
+                            )
+                            
+                            if media_result.get('success'):
+                                logger.info(f"[{request_id}] Image sent successfully")
+                                # Reset session state
+                                update_session(user_id, {'state': 'waiting_for_command'})
+                                return result
+                            else:
+                                # Try alternate approach - send image URL if available
+                                if image_url:
+                                    logger.info(f"[{request_id}] Trying to send image URL as fallback")
+                                    self.waapi_client.send_message(
+                                        user_id,
+                                        f"I created your marketing image but couldn't send it directly.\n\n"
+                                        f"You can view and download it here:\n{image_url}\n\n"
+                                        f"To create another image, send 'edit' again."
+                                    )
+                                    # Reset session state
+                                    update_session(user_id, {'state': 'waiting_for_command'})
+                                    return result
+                                else:
+                                    raise Exception("Failed to send image and no URL available")
+                            
+                        except Exception as send_error:
+                            logger.error(f"[{request_id}] Error sending image: {str(send_error)}")
+                            if attempt < self.max_retries:
+                                logger.info(f"[{request_id}] Retrying in {self.retry_delay} seconds...")
+                                time.sleep(self.retry_delay)
+                                continue
+                            else:
+                                raise
+                    
+                    # If generation failed, try fallback
+                    if attempt < self.max_retries:
+                        logger.warning(f"[{request_id}] Generation failed, retrying in {self.retry_delay} seconds...")
+                        time.sleep(self.retry_delay)
+                        continue
+                    else:
+                        logger.error(f"[{request_id}] All generation attempts failed")
+                        return {"success": False, "error": "Failed to generate image after multiple attempts"}
+                        
+                except Exception as e:
+                    logger.error(f"[{request_id}] Error in generate_marketing_image (attempt {attempt}): {str(e)}")
+                    logger.error(traceback.format_exc())
+                    
+                    if attempt < self.max_retries:
+                        logger.info(f"[{request_id}] Waiting {self.retry_delay} seconds before retry...")
+                        time.sleep(self.retry_delay)
+                    else:
+                        logger.error(f"[{request_id}] All retry attempts failed")
+                        return {"success": False, "error": str(e)}
             
-            if output_path and os.path.exists(output_path):
-                # Get file information
-                file_size = os.path.getsize(output_path)
-                file_hash = calculate_file_hash(output_path)
-                
-                logger.info(f"[{request_id}] Image generated successfully: {output_path}")
-                logger.info(f"[{request_id}] File size: {file_size} bytes, Hash: {file_hash}")
-                
-                # Build URL for serving the image
-                image_filename = os.path.basename(output_path)
-                image_url = f"{APP_URL}/images/output/{image_filename}"
-                logger.info(f"[{request_id}] Image URL: {image_url}")
-                
-                return {
-                    "success": True,
-                    "image_path": output_path,
-                    "image_url": image_url,
-                    "file_size": file_size,
-                    "file_hash": file_hash
-                }
-            else:
-                logger.error(f"[{request_id}] Failed to generate marketing image or output file not found")
-                return {
-                    "success": False,
-                    "error": "Failed to generate marketing image"
-                }
-                
+            return {"success": False, "error": "Unknown error occurred"}
+            
         except Exception as e:
             logger.error(f"[{request_id}] Error processing request: {str(e)}")
             logger.error(traceback.format_exc())
-            return {
-                "success": False,
-                "error": f"Error processing request: {str(e)}"
-            }
+            # Reset session state on error
+            update_session(user_id, {'state': 'waiting_for_command'})
+            return {"success": False, "error": str(e)}
 
     def verify_api_connections(self) -> Dict:
         """Verify connections to all required APIs"""
@@ -1221,13 +1265,22 @@ def get_session(user_id: str, create_if_missing: bool = True) -> Dict:
         elif create_if_missing:
             logger.info(f"Creating new session for {user_id}")
             session = {
-                "product_image": None,
-                "details": {},
                 "state": "waiting_for_command",
+                "product_image": None,
+                "details": {
+                    "company_name": None,
+                    "product_name": None,
+                    "price": None,
+                    "tagline": None,
+                    "address": None
+                },
                 "last_message_time": datetime.now().timestamp(),
                 "created_at": datetime.now().timestamp(),
                 "message_count": 0,
-                "history": []
+                "history": [],
+                "error_count": 0,
+                "retry_count": 0,
+                "last_error": None
             }
             user_sessions[user_id] = session
             return session
@@ -1236,13 +1289,31 @@ def get_session(user_id: str, create_if_missing: bool = True) -> Dict:
             return None
 
 def update_session(user_id: str, updates: Dict) -> Dict:
-    """Update a user session with thread safety"""
+    """Update a user session with thread safety and state validation"""
     with user_sessions_lock:
         if user_id not in user_sessions:
             logger.warning(f"Attempted to update non-existent session for {user_id}")
             return None
             
         session = user_sessions[user_id]
+        
+        # Validate state transitions
+        if 'state' in updates:
+            current_state = session.get('state', 'waiting_for_command')
+            new_state = updates['state']
+            
+            valid_transitions = {
+                'waiting_for_command': ['waiting_for_image'],
+                'waiting_for_image': ['waiting_for_details'],
+                'waiting_for_details': ['generating_image', 'waiting_for_command'],
+                'generating_image': ['delivering_image', 'waiting_for_command'],
+                'delivering_image': ['waiting_for_command']
+            }
+            
+            if current_state in valid_transitions and new_state not in valid_transitions[current_state]:
+                logger.warning(f"Invalid state transition from {current_state} to {new_state}")
+                return None
+        
         # Update fields
         for key, value in updates.items():
             session[key] = value
@@ -1251,6 +1322,10 @@ def update_session(user_id: str, updates: Dict) -> Dict:
         session['last_message_time'] = datetime.now().timestamp()
         # Increment message count
         session['message_count'] = session.get('message_count', 0) + 1
+        
+        # Log state change if applicable
+        if 'state' in updates:
+            logger.info(f"Session state changed for {user_id}: {current_state} -> {new_state}")
         
         logger.debug(f"Updated session for {user_id}, new state: {session.get('state', 'unknown')}")
         return session
