@@ -2275,220 +2275,64 @@ def webhook():
             logger.warning(f"[{webhook_id}] Invalid webhook data format")
             return jsonify({"status": "error", "message": "Invalid data format"}), 400
             
-        # Check for webhook verification if configured
-        if WEBHOOK_SECRET and request.args.get('verify') == 'true':
-            secret = request.args.get('secret')
-            if secret != WEBHOOK_SECRET:
-                logger.warning(f"[{webhook_id}] Invalid webhook verification secret")
-                return jsonify({"status": "error", "message": "Invalid verification secret"}), 403
-            else:
-                logger.info(f"[{webhook_id}] Webhook verification successful")
-                return jsonify({"status": "success", "message": "Webhook verified"})
-        
-        # Extract message ID to prevent duplicate processing
+        # Extract message data
         message_data = safe_get(webhook_data, 'data.message', {})
+        logger.info(f"[{webhook_id}] Message data: {json.dumps(message_data)}")
         
-        # Debug the message structure at detailed level
-        logger.debug(f"[{webhook_id}] Message data structure: {json.dumps(message_data)}")
+        # Extract sender and message content
+        from_number = safe_get(message_data, 'from', '')
+        body = safe_get(message_data, 'body', '').strip()
         
-        # Extract message ID carefully with multiple fallback options
-        message_id = None
+        logger.info(f"[{webhook_id}] Processing message from {from_number}: {body}")
         
-        # Try multiple locations for message ID
-        if isinstance(message_data, dict):
-            # Direct ID field
-            if 'id' in message_data:
-                msg_id = message_data['id']
-                if isinstance(msg_id, dict) and '_serialized' in msg_id:
-                    message_id = msg_id['_serialized']
-                else:
-                    message_id = str(msg_id)
-            
-            # ID in _data field
-            elif '_data' in message_data and isinstance(message_data['_data'], dict):
-                data_id = message_data['_data'].get('id')
-                if isinstance(data_id, dict) and '_serialized' in data_id:
-                    message_id = data_id['_serialized']
-                elif data_id:
-                    message_id = str(data_id)
+        # Validate sender is trial number
+        if from_number != "923114909725@c.us":
+            logger.warning(f"[{webhook_id}] Message from non-trial number: {from_number}")
+            return jsonify({"status": "error", "message": "Non-trial number not allowed"}), 403
         
-        # If no ID found, generate one
-        if not message_id:
-            # Generate pseudo-ID from timestamp and content hash
-            timestamp = datetime.now().timestamp()
-            content_hash = hashlib.md5(str(message_data).encode()).hexdigest()[:8]
-            message_id = f"gen_{timestamp}_{content_hash}"
-            logger.warning(f"[{webhook_id}] No message ID found, generated: {message_id}")
+        # Handle "edit" command
+        if body.lower() == "edit":
+            logger.info(f"[{webhook_id}] Processing 'edit' command from {from_number}")
+            
+            # Get or create session
+            session = get_session(from_number)
+            
+            # Update session state
+            update_session(from_number, {
+                'state': 'waiting_for_image',
+                'product_image': None,
+                'details': {}
+            })
+            
+            # Send welcome message
+            response = marketing_bot.waapi_client.send_message(
+                from_number,
+                "Welcome to Marketing Image Editor! 📸\n\n"
+                "Please send your product image to begin.\n\n"
+                "After sending the image, I'll ask for details like company name, product name, price, etc."
+            )
+            
+            if response.get('success'):
+                logger.info(f"[{webhook_id}] Successfully sent welcome message to {from_number}")
+            else:
+                logger.error(f"[{webhook_id}] Failed to send welcome message: {response.get('error')}")
+            
+            return jsonify({"status": "success", "message": "Edit command processed"})
         
-        # Skip if we've already processed this message
-        with processed_messages_lock:
-            if message_id in processed_messages:
-                logger.info(f"[{webhook_id}] Skipping duplicate message: {message_id}")
-                return jsonify({"status": "success", "message": "Duplicate message skipped"})
-            
-            # Mark as processed
-            processed_messages[message_id] = datetime.now().timestamp()
-            
-            # Limit cache size by removing old entries (keep last 100)
-            if len(processed_messages) > 100:
-                oldest = sorted(processed_messages.items(), key=lambda x: x[1])[0][0]
-                processed_messages.pop(oldest)
-                logger.debug(f"[{webhook_id}] Removed oldest message {oldest} from processed cache")
-        
-        # Determine event type
-        event_type = webhook_data.get('event', 'unknown')
-        
-        # Check if this is a message event
-        if event_type in ['message', 'message_create', 'chat']:
-            # Extract message details with robust fallbacks
-            message_type = ''
-            from_number = ''
-            body = ''
-            
-            # Try multiple paths to extract sender number
-            possible_from_paths = [
-                'data.message.from',
-                'data.message._data.from',
-                'data.from',
-                'message.from',
-                'sender'
-            ]
-            
-            for path in possible_from_paths:
-                from_number = safe_get(webhook_data, path, '')
-                if from_number:
-                    break
-            
-            # Try multiple paths to extract message type
-            possible_type_paths = [
-                'data.message.type',
-                'data.message._data.type',
-                'data.type',
-                'message.type',
-                'type'
-            ]
-            
-            for path in possible_type_paths:
-                message_type = safe_get(webhook_data, path, '')
-                if message_type:
-                    break
-            
-            # Try multiple paths to extract message body
-            possible_body_paths = [
-                'data.message.body',
-                'data.message._data.body',
-                'data.body',
-                'message.body',
-                'body'
-            ]
-            
-            for path in possible_body_paths:
-                raw_body = safe_get(webhook_data, path, '')
-                if raw_body:
-                    if isinstance(raw_body, str):
-                        body = raw_body.strip()
-                    break
-            
-            # Check for media in multiple ways
-            has_media = False
-            
-            # Direct media flags
-            media_flags = [
-                'data.message.hasMedia',
-                'data.message._data.hasMedia',
-                'data.hasMedia',
-                'message.hasMedia',
-                'hasMedia'
-            ]
-            
-            for flag_path in media_flags:
-                if safe_get(webhook_data, flag_path, False):
-                    has_media = True
-                    break
-            
-            # Check media type
-            if message_type in ['image', 'sticker', 'video', 'document']:
-                has_media = True
-            
-            # Check for mediaData fields
-            media_data_paths = [
-                'data.message.mediaData',
-                'data.message._data.mediaData',
-                'data.media',
-                'message.mediaData',
-                'mediaData'
-            ]
-            
-            for media_path in media_data_paths:
-                if safe_get(webhook_data, media_path):
-                    has_media = True
-                    break
-            
-            logger.info(f"[{webhook_id}] Received message from {from_number}: {body[:50]}{'...' if len(body) > 50 else ''}, Media: {has_media}, Type: {message_type}")
-            
-            # Handle group messages differently
-            if from_number and '@g.us' in from_number:
-                logger.info(f"[{webhook_id}] Received group message from {from_number}")
-                # Extract the actual sender from the group
-                author = safe_get(webhook_data, 'data.message._data.author', '')
-                if author and '@c.us' in author:
-                    from_number = author
-                    logger.info(f"[{webhook_id}] Extracted sender from group: {from_number}")
-                else:
-                    logger.warning(f"[{webhook_id}] Could not extract sender from group message")
-                    return jsonify({"status": "success", "message": "Group message processed"})
-            
-            # Validate phone number format
-            if not from_number or '@c.us' not in str(from_number):
-                logger.error(f"[{webhook_id}] Invalid or missing phone number format: {from_number}")
-                return jsonify({"status": "error", "message": "Invalid or missing phone number format"})
-            
-            # Extract media data with multiple fallbacks
-            media_data = None
-            
-            # Try multiple paths to find media data
-            media_data_paths = [
-                'data.media',
-                'data.message.mediaData',
-                'data.message._data.mediaData',
-                'message.mediaData',
-                'mediaData'
-            ]
-            
-            for media_path in media_data_paths:
-                media_data = safe_get(webhook_data, media_path)
-                if media_data:
-                    logger.debug(f"[{webhook_id}] Found media data at {media_path}")
-                    break
-            
-            # Handle media messages
-            if has_media:
-                logger.info(f"[{webhook_id}] Detected media in message from {from_number}, type: {message_type}")
-                
-                if not media_data:
-                    logger.info(f"[{webhook_id}] Media indicated but no media data in webhook, will use placeholder")
-                
-                # Process as image
-                handle_image_message(from_number, media_data)
-                return jsonify({"status": "success", "message": "Media processed"})
-                
-            # Handle text messages
+        # Handle other message types
+        if safe_get(message_data, 'type') == 'image':
+            logger.info(f"[{webhook_id}] Processing image message from {from_number}")
+            handle_image_message(from_number, message_data)
+        else:
+            logger.info(f"[{webhook_id}] Processing text message from {from_number}")
             handle_text_message(from_number, body)
-            return jsonify({"status": "success", "message": "Text processed"})
         
-        # Handle group join events
-        elif event_type == 'group_join':
-            logger.info(f"[{webhook_id}] Received group join event")
-            return jsonify({"status": "success", "message": "Group join event processed"})
+        return jsonify({"status": "success", "message": "Message processed"})
         
-        # Handle other event types
-        logger.info(f"[{webhook_id}] Received non-message event: {event_type}")
-        return jsonify({"status": "success", "message": f"Event {event_type} acknowledged"})
-    
     except Exception as e:
         logger.error(f"[{webhook_id}] Webhook error: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({"status": "error", "message": str(e)})
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 ###################
 # SESSION CLEANUP
