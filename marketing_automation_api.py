@@ -62,31 +62,20 @@ last_message_time = {}
 
 # Initialize OpenAI with error handling
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-OPENAI_VERSION = "unknown"
+OPENAI_VERSION = "new"
 openai_client = None
 
 if not OPENAI_API_KEY:
     logger.error("OPENAI_API_KEY not found in environment variables!")
     raise ValueError("OPENAI_API_KEY is required for marketing image generation")
 
-# Try new OpenAI client first, fall back to legacy if needed
 try:
     from openai import OpenAI
-    # Initialize with minimal parameters to avoid compatibility issues
     openai_client = OpenAI(api_key=OPENAI_API_KEY)
-    OPENAI_VERSION = "new"
-    logger.info("Successfully initialized new OpenAI client")
+    logger.info("Successfully initialized OpenAI client")
 except Exception as e:
-    logger.warning(f"Failed to initialize new OpenAI client: {str(e)}")
-    try:
-        import openai
-        openai.api_key = OPENAI_API_KEY
-        openai_client = openai
-        OPENAI_VERSION = "legacy"
-        logger.info("Successfully initialized legacy OpenAI client")
-    except Exception as e2:
-        logger.critical(f"Failed to initialize any OpenAI client: {str(e2)}")
-        raise RuntimeError(f"Failed to initialize OpenAI: {str(e2)}")
+    logger.critical(f"Failed to initialize OpenAI client: {str(e)}")
+    raise RuntimeError(f"Failed to initialize OpenAI: {str(e)}")
 
 # WaAPI configuration with validation
 WAAPI_API_TOKEN = os.getenv('WAAPI_API_TOKEN')
@@ -458,10 +447,9 @@ class ImageGenerator:
         logger.info("Initializing ImageGenerator")
         self.api_key = api_key
         self.client = openai_client
-        self.openai_version = OPENAI_VERSION
         self.max_retries = 3
         self.retry_delay = 5  # seconds
-        logger.info(f"ImageGenerator initialized with OpenAI API ({self.openai_version} version)")
+        logger.info("ImageGenerator initialized with OpenAI API")
     
     def generate_marketing_image(self, 
                                 product_image_path: str, 
@@ -569,89 +557,57 @@ class ImageGenerator:
         try:
             logger.info("Attempting image generation with DALL-E 3")
             
-            # 1. First try image editing with mask if using new client
-            if self.openai_version == "new":
-                try:
-                    # Create a transparent mask
-                    mask_path = ImageProcessor.create_transparent_mask(image_path)
-                    
-                    if mask_path and os.path.exists(mask_path):
-                        logger.info(f"Using DALL-E 3 image editing with mask")
-                        
-                        # Open image and mask files
-                        with open(image_path, "rb") as img_file, open(mask_path, "rb") as mask_file:
-                            # Use the edit endpoint with DALL-E 3
-                            result = self.client.images.edit(
-                                model="dall-e-3",
-                                image=img_file,
-                                mask=mask_file,
-                                prompt=prompt,
-                                size="1024x1024",
-                                n=1
-                            )
-                            logger.info("DALL-E 3 edit API call successful")
-                        
-                        # Process result
-                        if hasattr(result, 'data') and len(result.data) > 0:
-                            if hasattr(result.data[0], 'url'):
-                                logger.info("Image URL received from DALL-E 3 edit")
-                                response = requests.get(result.data[0].url, timeout=30)
-                                return response.content, "DALL-E 3 Edit"
-                            elif hasattr(result.data[0], 'b64_json'):
-                                logger.info("Base64 data received from DALL-E 3 edit")
-                                image_bytes = base64.b64decode(result.data[0].b64_json)
-                                return image_bytes, "DALL-E 3 Edit"
-                except Exception as edit_error:
-                    logger.warning(f"DALL-E 3 edit failed: {str(edit_error)}")
+            # Create a transparent mask
+            mask_path = ImageProcessor.create_transparent_mask(image_path)
             
-            # 2. Try standard DALL-E 3 generation
-            try:
-                logger.info("Using DALL-E 3 standard generation")
+            if mask_path and os.path.exists(mask_path):
+                logger.info(f"Using DALL-E 3 image editing with mask")
                 
-                if self.openai_version == "new":
-                    result = self.client.images.generate(
+                # Open image and mask files
+                with open(image_path, "rb") as img_file, open(mask_path, "rb") as mask_file:
+                    # Use the edit endpoint with DALL-E 3
+                    result = self.client.images.edit(
                         model="dall-e-3",
+                        image=img_file,
+                        mask=mask_file,
                         prompt=prompt,
                         size="1024x1024",
-                        quality="standard",
                         n=1
                     )
-                    
-                    # Process result
-                    if hasattr(result, 'data') and len(result.data) > 0:
-                        if hasattr(result.data[0], 'url'):
-                            logger.info("Image URL received from DALL-E 3 generation")
-                            response = requests.get(result.data[0].url, timeout=30)
-                            return response.content, "DALL-E 3 Generation"
-                        elif hasattr(result.data[0], 'b64_json'):
-                            logger.info("Base64 data received from DALL-E 3 generation")
-                            image_bytes = base64.b64decode(result.data[0].b64_json)
-                            return image_bytes, "DALL-E 3 Generation"
+                    logger.info("DALL-E 3 edit API call successful")
                 
-                elif self.openai_version == "legacy" and hasattr(self.client, 'Image') and hasattr(self.client.Image, 'create'):
-                    # Legacy client with DALL-E 3 if available
-                    result = self.client.Image.create(
-                        model="dall-e-3",  # May not be supported in all legacy versions
-                        prompt=prompt,
-                        n=1,
-                        size="1024x1024"
-                    )
-                    
-                    # Process result
-                    if 'data' in result and len(result['data']) > 0:
-                        if 'url' in result['data'][0]:
-                            logger.info("Image URL received from legacy DALL-E 3")
-                            response = requests.get(result['data'][0]['url'], timeout=30)
-                            return response.content, "Legacy DALL-E 3"
-                        elif 'b64_json' in result['data'][0]:
-                            logger.info("Base64 data received from legacy DALL-E 3")
-                            image_bytes = base64.b64decode(result['data'][0]['b64_json'])
-                            return image_bytes, "Legacy DALL-E 3"
+                # Process result
+                if hasattr(result, 'data') and len(result.data) > 0:
+                    if hasattr(result.data[0], 'url'):
+                        logger.info("Image URL received from DALL-E 3 edit")
+                        response = requests.get(result.data[0].url, timeout=30)
+                        return response.content, "DALL-E 3 Edit"
+                    elif hasattr(result.data[0], 'b64_json'):
+                        logger.info("Base64 data received from DALL-E 3 edit")
+                        image_bytes = base64.b64decode(result.data[0].b64_json)
+                        return image_bytes, "DALL-E 3 Edit"
             
-            except Exception as gen_error:
-                logger.warning(f"DALL-E 3 generation failed: {str(gen_error)}")
+            # Try standard DALL-E 3 generation
+            logger.info("Using DALL-E 3 standard generation")
+            result = self.client.images.generate(
+                model="dall-e-3",
+                prompt=prompt,
+                size="1024x1024",
+                quality="standard",
+                n=1
+            )
             
-            # All DALL-E 3 methods failed
+            # Process result
+            if hasattr(result, 'data') and len(result.data) > 0:
+                if hasattr(result.data[0], 'url'):
+                    logger.info("Image URL received from DALL-E 3 generation")
+                    response = requests.get(result.data[0].url, timeout=30)
+                    return response.content, "DALL-E 3 Generation"
+                elif hasattr(result.data[0], 'b64_json'):
+                    logger.info("Base64 data received from DALL-E 3 generation")
+                    image_bytes = base64.b64decode(result.data[0].b64_json)
+                    return image_bytes, "DALL-E 3 Generation"
+            
             return None
             
         except Exception as e:
@@ -663,45 +619,24 @@ class ImageGenerator:
         try:
             logger.info("Attempting image generation with DALL-E 2")
             
-            if self.openai_version == "new":
-                result = self.client.images.generate(
-                    model="dall-e-2",
-                    prompt=prompt,
-                    size="1024x1024",
-                    n=1
-                )
-                
-                # Process result
-                if hasattr(result, 'data') and len(result.data) > 0:
-                    if hasattr(result.data[0], 'url'):
-                        logger.info("Image URL received from DALL-E 2")
-                        response = requests.get(result.data[0].url, timeout=30)
-                        return response.content, "DALL-E 2"
-                    elif hasattr(result.data[0], 'b64_json'):
-                        logger.info("Base64 data received from DALL-E 2")
-                        image_bytes = base64.b64decode(result.data[0].b64_json)
-                        return image_bytes, "DALL-E 2"
+            result = self.client.images.generate(
+                model="dall-e-2",
+                prompt=prompt,
+                size="1024x1024",
+                n=1
+            )
             
-            elif self.openai_version == "legacy" and hasattr(self.client, 'Image') and hasattr(self.client.Image, 'create'):
-                # Legacy client with DALL-E 2
-                result = self.client.Image.create(
-                    prompt=prompt,
-                    n=1,
-                    size="1024x1024"
-                )
-                
-                # Process result
-                if 'data' in result and len(result['data']) > 0:
-                    if 'url' in result['data'][0]:
-                        logger.info("Image URL received from legacy DALL-E 2")
-                        response = requests.get(result['data'][0]['url'], timeout=30)
-                        return response.content, "Legacy DALL-E 2"
-                    elif 'b64_json' in result['data'][0]:
-                        logger.info("Base64 data received from legacy DALL-E 2")
-                        image_bytes = base64.b64decode(result['data'][0]['b64_json'])
-                        return image_bytes, "Legacy DALL-E 2"
+            # Process result
+            if hasattr(result, 'data') and len(result.data) > 0:
+                if hasattr(result.data[0], 'url'):
+                    logger.info("Image URL received from DALL-E 2")
+                    response = requests.get(result.data[0].url, timeout=30)
+                    return response.content, "DALL-E 2"
+                elif hasattr(result.data[0], 'b64_json'):
+                    logger.info("Base64 data received from DALL-E 2")
+                    image_bytes = base64.b64decode(result.data[0].b64_json)
+                    return image_bytes, "DALL-E 2"
             
-            # All DALL-E 2 methods failed
             return None
             
         except Exception as e:
@@ -1969,25 +1904,17 @@ def test_openai():
         # Initial connection info
         result = {
             "timestamp": datetime.now().isoformat(),
-            "client_version": OPENAI_VERSION,
             "api_key_length": len(OPENAI_API_KEY) if OPENAI_API_KEY else 0,
             "tests": {}
         }
         
-        # Try model list first
+        # Try model list
         try:
-            if OPENAI_VERSION == "new":
-                models = openai_client.models.list()
-                result["tests"]["models_list"] = {
-                    "success": True,
-                    "model_count": len(models.data) if hasattr(models, 'data') else "unknown"
-                }
-            else:
-                models = openai_client.Model.list()
-                result["tests"]["models_list"] = {
-                    "success": True,
-                    "model_count": len(models.data) if 'data' in models else "unknown"
-                }
+            models = openai_client.models.list()
+            result["tests"]["models_list"] = {
+                "success": True,
+                "model_count": len(models.data) if hasattr(models, 'data') else "unknown"
+            }
         except Exception as model_err:
             result["tests"]["models_list"] = {
                 "success": False,
@@ -1996,31 +1923,17 @@ def test_openai():
         
         # Try a simple DALL-E 2 generation (faster/cheaper than DALL-E 3)
         try:
-            if OPENAI_VERSION == "new":
-                logger.info("Testing with new OpenAI client - DALL-E 2")
-                image_result = openai_client.images.generate(
-                    model="dall-e-2",
-                    prompt="A simple test image of a red cube",
-                    size="256x256",
-                    n=1
-                )
-                result["tests"]["image_generation"] = {
-                    "success": True,
-                    "model": "dall-e-2",
-                    "response_type": "new_client"
-                }
-            else:
-                logger.info("Testing with legacy OpenAI client")
-                image_result = openai_client.Image.create(
-                    prompt="A simple test image of a red cube",
-                    n=1,
-                    size="256x256"
-                )
-                result["tests"]["image_generation"] = {
-                    "success": True,
-                    "model": "dall-e-2",
-                    "response_type": "legacy_client"
-                }
+            logger.info("Testing with OpenAI client - DALL-E 2")
+            image_result = openai_client.images.generate(
+                model="dall-e-2",
+                prompt="A simple test image of a red cube",
+                size="256x256",
+                n=1
+            )
+            result["tests"]["image_generation"] = {
+                "success": True,
+                "model": "dall-e-2"
+            }
         except Exception as img_err:
             result["tests"]["image_generation"] = {
                 "success": False,
