@@ -723,12 +723,41 @@ class WaAPIClient:
         self.rate_limit_start = time.time()
         self.rate_limit_max = 20  # Reduced from 30 to be more conservative
         self.rate_limit_backoff = 1.5  # Exponential backoff factor
+        self.connection_status = "disconnected"
+        self.last_status_check = 0
+        self.status_check_interval = 30  # seconds
         logger.info("WaAPIClient initialized successfully")
-    
+
+    def _check_rate_limit(self) -> bool:
+        """Check if we're rate limited and wait if necessary"""
+        current_time = time.time()
+        
+        # Reset counter if window has passed
+        if current_time - self.rate_limit_start > self.rate_limit_window:
+            self.rate_limit_count = 0
+            self.rate_limit_start = current_time
+            return True
+            
+        # Check if we're rate limited
+        if self.rate_limit_count >= self.rate_limit_max:
+            wait_time = self.rate_limit_window - (current_time - self.rate_limit_start)
+            if wait_time > 0:
+                logger.warning(f"Rate limit reached, waiting {wait_time:.2f} seconds")
+                time.sleep(wait_time)
+                self.rate_limit_count = 0
+                self.rate_limit_start = time.time()
+            return True
+            
+        return False
+
     def _make_request(self, method: str, endpoint: str, data: Dict = None, retry: bool = True) -> Dict:
-        """Make a request to the WaAPI API with improved rate limiting"""
+        """Make a request to the WaAPI API with improved rate limiting and error handling"""
         url = f"{self.api_base_url}/{endpoint}"
         logger.info(f"Making {method} request to {endpoint}")
+        
+        # Check rate limit before making request
+        if self._check_rate_limit():
+            logger.warning("Request delayed due to rate limiting")
         
         # Implement retries with exponential backoff
         max_retries = self.max_retries if retry else 1
@@ -737,22 +766,6 @@ class WaAPIClient:
         
         while retry_count < max_retries:
             try:
-                # Check rate limiting
-                current_time = time.time()
-                if current_time - self.rate_limit_start > self.rate_limit_window:
-                    # Reset rate limit counter if window has passed
-                    self.rate_limit_count = 0
-                    self.rate_limit_start = current_time
-                
-                # If we're rate limited, wait with exponential backoff
-                if self.rate_limit_count >= self.rate_limit_max:
-                    wait_time = self.rate_limit_window - (current_time - self.rate_limit_start)
-                    if wait_time > 0:
-                        logger.warning(f"Rate limit reached, waiting {wait_time:.2f} seconds")
-                        time.sleep(wait_time)
-                        self.rate_limit_count = 0
-                        self.rate_limit_start = time.time()
-                
                 # Prepare request based on method
                 if method.lower() == "get":
                     response = requests.get(url, headers=self.headers, timeout=30)
@@ -832,26 +845,38 @@ class WaAPIClient:
         
         # If we've exhausted all retries
         return {"success": False, "error": "Request failed after multiple attempts"}
-    
+
     def get_instance_status(self) -> Dict:
-        """Get the status of the instance"""
+        """Get the status of the instance with caching"""
+        current_time = time.time()
+        
+        # Return cached status if within check interval
+        if current_time - self.last_status_check < self.status_check_interval:
+            return {
+                "success": True,
+                "status": self.connection_status,
+                "cached": True
+            }
+        
         logger.info("Checking instance status")
         result = self._make_request("get", f"instances/{self.instance_id}/client/status")
         
         # Process and enhance the result
         if result.get("status") == "success":
             logger.info("Instance status check successful")
+            self.connection_status = "connected" if safe_get(result, "data.instance.connected", False) else "disconnected"
+            self.last_status_check = current_time
             return {
                 "success": True,
-                "status": "connected" if safe_get(result, "data.instance.connected", False) else "disconnected",
+                "status": self.connection_status,
                 "data": result.get("data", {})
             }
         else:
             logger.error(f"Failed to get instance status: {result.get('error', 'Unknown error')}")
             return {"success": False, "error": result.get("error", "Unknown error")}
-    
-    def send_message(self, to: str, message: str) -> Dict:
-        """Send a text message via WhatsApp with rate limiting and validation"""
+
+    def send_message(self, to: str, message: str, message_type: str = "text") -> Dict:
+        """Send a message via WhatsApp with improved validation and rate limiting"""
         # Input validation
         if not to or not message:
             logger.error("Missing required parameters (to or message)")
@@ -859,6 +884,12 @@ class WaAPIClient:
             
         # Format phone number to WhatsApp format
         to = self._format_phone_number(to)
+        
+        # Check instance status before sending
+        status = self.get_instance_status()
+        if not status.get("success") or status.get("status") != "connected":
+            logger.error("Instance is not connected")
+            return {"success": False, "error": "Instance is not connected"}
         
         # Apply rate limiting
         with last_message_time_lock:
@@ -868,15 +899,24 @@ class WaAPIClient:
                 logger.info(f"Rate limiting message to {to} - waiting {wait_time:.2f} seconds")
                 time.sleep(wait_time)
         
-        # Prepare request data
+        # Prepare request data based on message type
         data = {
-            "chatId": to,
-            "message": message
+            "chatId": to
         }
+        
+        if message_type == "text":
+            data["message"] = message
+        elif message_type == "template":
+            data["template"] = message
+        elif message_type == "interactive":
+            data["interactive"] = message
+        else:
+            logger.error(f"Invalid message type: {message_type}")
+            return {"success": False, "error": f"Invalid message type: {message_type}"}
         
         # Log message (truncated for privacy)
         display_message = message[:50] + ('...' if len(message) > 50 else '')
-        logger.info(f"Sending message to {to}: {display_message}")
+        logger.info(f"Sending {message_type} message to {to}: {display_message}")
         
         # Make the API request
         result = self._make_request(
@@ -896,7 +936,28 @@ class WaAPIClient:
             error_msg = result.get("error", "Unknown error")
             logger.error(f"Error sending message: {error_msg}")
             return {"success": False, "error": error_msg}
-    
+
+    def send_template_message(self, to: str, template_name: str, template_variables: Dict = None) -> Dict:
+        """Send a template message with variables"""
+        if not template_name:
+            logger.error("Template name is required")
+            return {"success": False, "error": "Template name is required"}
+            
+        template_data = {
+            "name": template_name,
+            "variables": template_variables or {}
+        }
+        
+        return self.send_message(to, json.dumps(template_data), "template")
+
+    def send_interactive_message(self, to: str, interactive_data: Dict) -> Dict:
+        """Send an interactive message (buttons, lists, etc.)"""
+        if not interactive_data:
+            logger.error("Interactive data is required")
+            return {"success": False, "error": "Interactive data is required"}
+            
+        return self.send_message(to, json.dumps(interactive_data), "interactive")
+
     def send_media(self, to: str, caption: str = "", media_url: str = None, media_base64: str = None, 
                   filename: str = None, is_sticker: bool = False) -> Dict:
         """Send a media message via WhatsApp with validation and fallbacks"""
