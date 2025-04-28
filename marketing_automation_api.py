@@ -21,6 +21,7 @@ from PIL import Image, ImageOps
 from io import BytesIO
 from flask import Flask, request, jsonify, render_template, send_from_directory, Response
 from dotenv import load_dotenv
+import httpx
 
 ###################
 # CONFIGURATION
@@ -70,12 +71,19 @@ if not OPENAI_API_KEY:
 
 try:
     from openai import OpenAI
-    # Initialize with explicit configuration to avoid proxy issues
+    
+    # Create a custom HTTP client that handles proxy settings
+    class CustomHTTPClient(httpx.Client):
+        def __init__(self, *args, **kwargs):
+            kwargs.pop("proxies", None)  # Remove the 'proxies' argument if present
+            super().__init__(*args, **kwargs)
+    
+    # Initialize with custom HTTP client
     openai_client = OpenAI(
         api_key=OPENAI_API_KEY,
-        http_client=None,  # Explicitly set to None to prevent proxy issues
-        timeout=30.0,  # Set a reasonable timeout
-        max_retries=3  # Set retry attempts
+        http_client=CustomHTTPClient(),
+        timeout=30.0,
+        max_retries=3
     )
     logger.info("Successfully initialized OpenAI client")
 except Exception as e:
