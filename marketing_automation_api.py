@@ -2242,6 +2242,18 @@ def webhook():
             
             logger.info(f"[{webhook_id}] Received message from {from_number}: {body[:50]}{'...' if len(body) > 50 else ''}, Media: {has_media}, Type: {message_type}")
             
+            # Handle group messages differently
+            if from_number and '@g.us' in from_number:
+                logger.info(f"[{webhook_id}] Received group message from {from_number}")
+                # Extract the actual sender from the group
+                author = safe_get(webhook_data, 'data.message._data.author', '')
+                if author and '@c.us' in author:
+                    from_number = author
+                    logger.info(f"[{webhook_id}] Extracted sender from group: {from_number}")
+                else:
+                    logger.warning(f"[{webhook_id}] Could not extract sender from group message")
+                    return jsonify({"status": "success", "message": "Group message processed"})
+            
             # Validate phone number format
             if not from_number or '@c.us' not in str(from_number):
                 logger.error(f"[{webhook_id}] Invalid or missing phone number format: {from_number}")
@@ -2279,6 +2291,11 @@ def webhook():
             # Handle text messages
             handle_text_message(from_number, body)
             return jsonify({"status": "success", "message": "Text processed"})
+        
+        # Handle group join events
+        elif event_type == 'group_join':
+            logger.info(f"[{webhook_id}] Received group join event")
+            return jsonify({"status": "success", "message": "Group join event processed"})
         
         # Handle other event types
         logger.info(f"[{webhook_id}] Received non-message event: {event_type}")
