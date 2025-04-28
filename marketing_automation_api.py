@@ -520,8 +520,8 @@ def webhook():
         webhook_data = request.json
         logger.info(f"Received webhook: {json.dumps(webhook_data)}")
         
-        # Check if this is a message event
-        if webhook_data.get('event') == 'message':
+        # Check if this is a message or message_create event
+        if webhook_data.get('event') == 'message' or webhook_data.get('event') == 'message_create':
             message_data = webhook_data.get('data', {}).get('message', {})
             
             # Extract message details
@@ -532,12 +532,7 @@ def webhook():
             
             logger.info(f"Received message from {from_number}: {body}, Media: {has_media}")
             
-            # Check if the number is in the proper format
-            if '@c.us' not in from_number:
-                logger.error(f"Invalid phone number format: {from_number}")
-                return jsonify({"status": "error", "message": "Invalid phone number format"})
-            
-            # Handle media messages (images)
+            # Handle the message
             if has_media and message_type in ['image', 'sticker']:
                 media_data = webhook_data.get('data', {}).get('media', {})
                 handle_image_message(from_number, media_data)
