@@ -716,16 +716,20 @@ class WaAPIClient:
             "Accept": "application/json",
             "Content-Type": "application/json"
         }
+        # Trial instance limits: 10 actions per 5 minutes
         self.max_retries = 3
         self.retry_delay = 2  # seconds
-        self.rate_limit_window = 60  # seconds
+        self.rate_limit_window = 300  # 5 minutes in seconds (trial limit)
         self.rate_limit_count = 0
         self.rate_limit_start = time.time()
-        self.rate_limit_max = 20  # Reduced from 30 to be more conservative
-        self.rate_limit_backoff = 1.5  # Exponential backoff factor
+        self.rate_limit_max = 8  # Conservative limit (10 - 2 for safety)
+        self.rate_limit_backoff = 2.0  # More aggressive backoff
         self.connection_status = "disconnected"
         self.last_status_check = 0
-        self.status_check_interval = 30  # seconds
+        self.status_check_interval = 60  # seconds (reduced frequency)
+        self.trial_number = "923114909725@c.us"  # Your trial number
+        self.webhook_retry_count = 0
+        self.max_webhook_retries = 3
         logger.info("WaAPIClient initialized successfully")
 
     def _check_rate_limit(self) -> bool:
@@ -884,6 +888,11 @@ class WaAPIClient:
             
         # Format phone number to WhatsApp format
         to = self._format_phone_number(to)
+        
+        # Trial instance validation
+        if to != self.trial_number:
+            logger.error(f"Trial instance can only send to {self.trial_number}")
+            return {"success": False, "error": "Trial instance can only send to registered number"}
         
         # Check instance status before sending
         status = self.get_instance_status()
