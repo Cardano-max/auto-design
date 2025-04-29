@@ -216,26 +216,23 @@ class ImageGenerator:
                     # Using newer OpenAI client
                     logger.info("Using new OpenAI client for image generation")
                     result = self.client.images.generate(
-                        model="dall-e-3",
+                        model="gpt-image-1",
                         prompt=prompt,
                         size="1024x1024",
-                        quality="standard",
-                        n=1
+                        n=1,
+                        response_format="b64_json",
+                        quality="high",
+                        background="transparent"
                     )
                     logger.info("OpenAI API request completed")
                     
-                    if hasattr(result.data[0], 'url'):
-                        logger.info("Image URL received, downloading image")
-                        image_url = result.data[0].url
-                        response = requests.get(image_url)
-                        image_bytes = response.content
-                        logger.info("Image downloaded successfully")
-                    elif hasattr(result.data[0], 'b64_json'):
+                    if hasattr(result.data[0], 'b64_json'):
                         logger.info("Image base64 data received, decoding")
-                        image_bytes = base64.b64decode(result.data[0].b64_json)
+                        image_base64 = result.data[0].b64_json
+                        image_bytes = base64.b64decode(image_base64)
                         logger.info("Image decoded successfully")
                     else:
-                        logger.error("No image URL or base64 data in OpenAI response")
+                        logger.error("No image base64 data in OpenAI response")
                         return None
                 else:
                     # Using legacy OpenAI API

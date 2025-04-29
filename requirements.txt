@@ -2,7 +2,7 @@
 flask==2.3.3
 requests==2.31.0
 python-dotenv==1.0.0
-openai==1.55.3  # Compatible version with proper error handling
+openai==1.76.0  # Latest version for gpt-image-1 support
 httpx==0.27.2  # Version that supports proxies argument
 pillow==10.2.0
 
