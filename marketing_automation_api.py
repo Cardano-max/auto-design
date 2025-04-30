@@ -231,8 +231,7 @@ class ImageGenerator:
                             prompt=prompt,
                             size="1024x1024",
                             n=1,
-                            response_format="b64_json",
-                            quality="low"  # Use low quality for production to save credits
+                            quality="low"
                         )
                         print(f"[DEBUG] API call successful on attempt {retry+1}")
                         # If successful, break the retry loop
