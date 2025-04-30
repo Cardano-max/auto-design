@@ -24,16 +24,28 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Configure logging
+# Configure production-grade logging
+log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+log_path = os.getenv('LOG_PATH', 'logs')
+os.makedirs(log_path, exist_ok=True)
+
+# Create a rotating file handler
+from logging.handlers import RotatingFileHandler
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, log_level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("marketing_bot.log"),
+        RotatingFileHandler(
+            os.path.join(log_path, "marketing_bot.log"),
+            maxBytes=10*1024*1024,  # 10MB
+            backupCount=5
+        ),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger("MarketingBotWhatsApp")
+logger.info(f"Logging initialized at {log_level} level")
 
 # Create Flask app
 app = Flask(__name__, static_folder='static', template_folder='templates')
@@ -42,18 +54,21 @@ app = Flask(__name__, static_folder='static', template_folder='templates')
 os.makedirs('images/input', exist_ok=True)
 os.makedirs('images/output', exist_ok=True)
 
-# Store user sessions
+# Store user sessions with expiration management
 user_sessions = {}
+SESSION_TIMEOUT_HOURS = 24  # Auto-expire sessions after 24 hours of inactivity
 
 # Store processed messages to prevent duplicates
 processed_messages = {}
+MAX_PROCESSED_MESSAGES = 1000  # Limit the cache size
 
 # Store last message time for rate limiting
 last_message_time = {}
+RATE_LIMIT_SECONDS = 2  # Minimum seconds between messages
 
-# Initialize OpenAI with compatibility handling
-# IMPORTANT: Add OPENAI_API_KEY to your Railway variables too!
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')  # Add this to Railway variables
+# Initialize OpenAI with API key from environment variables
+# CRITICAL: Set this in Railway environment variables
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 if not OPENAI_API_KEY:
     logger.error("OPENAI_API_KEY not found in environment variables!")
@@ -63,13 +78,10 @@ try:
     from openai import OpenAI
     openai_client = OpenAI(api_key=OPENAI_API_KEY)
     OPENAI_VERSION = "new"
-    logger.info("Using new OpenAI client version")
+            logger.info("Using new OpenAI client version")
 except Exception as e:
-    logger.warning(f"Using legacy OpenAI API: {str(e)}")
-    import openai
-    openai.api_key = OPENAI_API_KEY
-    openai_client = openai
-    OPENAI_VERSION = "legacy"
+    logger.error(f"Failed to initialize OpenAI client: {str(e)}", exc_info=True)
+    raise ValueError("OpenAI client initialization failed. Please check your API key and dependencies.")
 
 # WaAPI configuration - from environment variables
 WAAPI_API_TOKEN = os.getenv('WAAPI_API_TOKEN')
@@ -115,7 +127,7 @@ class PromptTemplates:
 3. DESIGN STYLE:
    - Professional marketing aesthetics similar to high-end brands
    - Clean, modern layout with balanced spacing
-   - Background: {product_details.get('background_style', 'light beige')} with subtle texture/gradient
+   - Background: light gradient that complements the product's colors
    - Use complementary colors that enhance the product's appeal
    - Ensure all text is perfectly readable
 
@@ -209,30 +221,52 @@ class ImageGenerator:
                 prompt = PromptTemplates.get_master_template(product_details)
                 logger.info("Using master template")
             
+            # Log the full prompt for debugging
+            logger.info(f"Generated prompt: {prompt}")
+            
             # Generate the image
             try:
                 logger.info("Sending image generation request to OpenAI API")
                 if self.openai_version == "new":
-                    # Using newer OpenAI client
-                    logger.info("Using new OpenAI client for image generation")
-                    result = self.client.images.generate(
-                        model="gpt-image-1",
-                        prompt=prompt,
-                        size="1024x1024",
-                        n=1,
-                        response_format="b64_json",
-                        quality="high",
-                        background="transparent"
-                    )
+                    # Using newer OpenAI client with gpt-image-1 model
+                    logger.info("Using new OpenAI client for image generation with gpt-image-1 model")
+                    # Log the exact API parameters for debugging
+                    logger.debug(f"OpenAI API parameters: model=gpt-image-1, size=1024x1024, quality=low")
+                    
+                    # Add retries for production reliability
+                    max_retries = 3
+                    retry_delay = 2
+                    
+                    for retry in range(max_retries):
+                        try:
+                            result = self.client.images.generate(
+                                model="gpt-image-1",
+                                prompt=prompt,
+                                size="1024x1024",
+                                n=1,
+                                response_format="b64_json",
+                                quality="low"  # Use low quality for production to save credits
+                            )
+                            # If successful, break the retry loop
+                            break
+                        except Exception as retry_error:
+                            logger.warning(f"API call attempt {retry+1} failed: {str(retry_error)}")
+                            if retry < max_retries - 1:
+                                logger.info(f"Retrying in {retry_delay} seconds...")
+                                time.sleep(retry_delay)
+                                retry_delay *= 2  # Exponential backoff
+                            else:
+                                # Last attempt failed, re-raise the exception
+                                logger.error("All API call retries failed")
+                                raise
                     logger.info("OpenAI API request completed")
                     
-                    if hasattr(result.data[0], 'b64_json'):
+                    if hasattr(result, 'data') and len(result.data) > 0 and hasattr(result.data[0], 'b64_json'):
                         logger.info("Image base64 data received, decoding")
-                        image_base64 = result.data[0].b64_json
-                        image_bytes = base64.b64decode(image_base64)
+                        image_bytes = base64.b64decode(result.data[0].b64_json)
                         logger.info("Image decoded successfully")
                     else:
-                        logger.error("No image base64 data in OpenAI response")
+                        logger.error("No image data in OpenAI response")
                         return None
                 else:
                     # Using legacy OpenAI API
@@ -240,23 +274,18 @@ class ImageGenerator:
                     result = self.client.Image.create(
                         prompt=prompt,
                         n=1,
-                        size="1024x1024"
+                        size="1024x1024",
+                        response_format="b64_json"
                     )
                     logger.info("OpenAI API request completed")
                     
                     if 'data' in result and len(result['data']) > 0:
-                        if 'url' in result['data'][0]:
-                            logger.info("Image URL received, downloading image")
-                            image_url = result['data'][0]['url']
-                            response = requests.get(image_url)
-                            image_bytes = response.content
-                            logger.info("Image downloaded successfully")
-                        elif 'b64_json' in result['data'][0]:
+                        if 'b64_json' in result['data'][0]:
                             logger.info("Image base64 data received, decoding")
                             image_bytes = base64.b64decode(result['data'][0]['b64_json'])
                             logger.info("Image decoded successfully")
                         else:
-                            logger.error("No image URL or base64 data in OpenAI response")
+                            logger.error("No base64 data in OpenAI response")
                             return None
                     else:
                         logger.error("No image data in response")
@@ -285,54 +314,52 @@ class ImageGenerator:
                 return output_path
                 
             except Exception as api_error:
-                logger.error(f"OpenAI API Error: {str(api_error)}")
+                logger.error(f"OpenAI API Error: {str(api_error)}", exc_info=True)
                 
-                # Fallback to simpler generation
+                # Fallback to dall-e-2 model
                 try:
-                    logger.info("Trying fallback generation method")
+                    logger.info("Trying fallback generation with DALL-E 2")
                     if self.openai_version == "new":
                         logger.info("Falling back to DALL-E 2 with new client")
                         result = self.client.images.generate(
                             model="dall-e-2",
                             prompt=prompt,
                             size="1024x1024",
-                            n=1
+                            n=1,
+                            response_format="b64_json"
                         )
                     else:
                         logger.info("Retrying with legacy client")
                         result = self.client.Image.create(
                             prompt=prompt,
                             n=1,
-                            size="1024x1024"
+                            size="1024x1024",
+                            response_format="b64_json"
                         )
                     
-                    # Process the response (same as above)
+                    # Process the response
                     image_bytes = None
                     if self.openai_version == "new":
                         logger.info("Processing fallback response from new client")
-                        if hasattr(result.data[0], 'url'):
-                            logger.info("Fallback: Image URL received, downloading")
-                            response = requests.get(result.data[0].url)
-                            image_bytes = response.content
-                        else:
+                        if hasattr(result, 'data') and len(result.data) > 0 and hasattr(result.data[0], 'b64_json'):
                             logger.info("Fallback: Image base64 data received, decoding")
                             image_bytes = base64.b64decode(result.data[0].b64_json)
                     else:
                         logger.info("Processing fallback response from legacy client")
-                        if 'data' in result and len(result['data']) > 0:
-                            if 'url' in result['data'][0]:
-                                logger.info("Fallback: Image URL received, downloading")
-                                response = requests.get(result['data'][0]['url'])
-                                image_bytes = response.content
-                            elif 'b64_json' in result['data'][0]:
-                                logger.info("Fallback: Image base64 data received, decoding")
-                                image_bytes = base64.b64decode(result['data'][0]['b64_json'])
+                        if 'data' in result and len(result['data']) > 0 and 'b64_json' in result['data'][0]:
+                            logger.info("Fallback: Image base64 data received, decoding")
+                            image_bytes = base64.b64decode(result['data'][0]['b64_json'])
                     
                     if not image_bytes:
                         logger.error("Fallback generation failed: No image data")
                         return None
                     
                     # Save the image
+                    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                    product_name_safe = product_details.get('product_name', 'product').replace(' ', '_')[:20]
+                    output_filename = f"{product_name_safe}_{timestamp}.png"
+                    output_path = os.path.join("images/output", output_filename)
+                    
                     logger.info("Saving fallback image")
                     image = Image.open(BytesIO(image_bytes))
                     if image.size[0] > 1500 or image.size[1] > 1500:
@@ -344,11 +371,11 @@ class ImageGenerator:
                     return output_path
                     
                 except Exception as fallback_error:
-                    logger.error(f"Fallback generation failed: {str(fallback_error)}")
+                    logger.error(f"Fallback generation failed: {str(fallback_error)}", exc_info=True)
                     return None
                 
         except Exception as e:
-            logger.error(f"Error generating marketing image: {str(e)}")
+            logger.error(f"Error generating marketing image: {str(e)}", exc_info=True)
             return None
 
 ###################
@@ -534,6 +561,8 @@ class MarketingBot:
         """Process a marketing image request"""
         try:
             logger.info(f"Processing request for user {user_id}")
+            logger.info(f"Product details: {json.dumps(product_details)}")
+            logger.info(f"Product image path: {product_image_path}")
             
             # Generate marketing image
             logger.info("Starting image generation")
@@ -563,7 +592,7 @@ class MarketingBot:
                 }
                 
         except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
+            logger.error(f"Error processing request: {str(e)}", exc_info=True)
             return {
                 "success": False,
                 "error": str(e)
@@ -584,6 +613,12 @@ marketing_bot = MarketingBot(
 def handle_text_message(from_number: str, text: str):
     """Handle incoming text messages"""
     try:
+        # Sanitize inputs for security
+        from_number = str(from_number).strip()
+        if text is None:
+            text = ""
+        text = str(text).strip()
+        
         logger.info(f"Processing text message: '{text}' from {from_number}")
         
         # Create session if not exists
@@ -592,14 +627,19 @@ def handle_text_message(from_number: str, text: str):
             user_sessions[from_number] = {
                 "product_image": None,
                 "details": {},
-                "state": "waiting_for_command"
+                "state": "waiting_for_command",
+                "last_activity": datetime.now().timestamp(),
+                "created_at": datetime.now().timestamp()
             }
+        else:
+            # Update last activity timestamp
+            user_sessions[from_number]["last_activity"] = datetime.now().timestamp()
         
         session = user_sessions[from_number]
         logger.info(f"Current session state: {session['state']}")
         
-        # Check for start command
-        if text == 'edit':
+        # Check for start command (case insensitive)
+        if text.lower() == 'edit':
             logger.info(f"User {from_number} sent 'edit' command")
             session['state'] = 'waiting_for_image'
             session['product_image'] = None
@@ -615,8 +655,8 @@ def handle_text_message(from_number: str, text: str):
             logger.info(f"Sent welcome message to {from_number}")
             return
         
-        # Check for generate command
-        if text == 'generate':
+        # Check for generate command (case insensitive)
+        if text.lower() == 'generate':
             logger.info(f"User {from_number} sent 'generate' command")
             # Validate we have all required info
             if not session.get('product_image'):
@@ -646,11 +686,12 @@ def handle_text_message(from_number: str, text: str):
                 )
                 return
             
-            # Generate the image
+            # All required information is present, generate the image
             logger.info(f"Sending generation message to {from_number}")
             marketing_bot.waapi_client.send_message(
                 from_number,
-                "✨ Generating your marketing image..."
+                "✨ Generating your marketing image...\n"
+                "This may take a moment."
             )
             
             # Process in the background
@@ -754,41 +795,47 @@ def handle_text_message(from_number: str, text: str):
                 if not session['details'].get('company_name'):
                     session['details']['company_name'] = text
                     logger.info(f"Set company_name: {text}")
+                    detail_provided = True
                 elif not session['details'].get('product_name'):
                     session['details']['product_name'] = text
                     logger.info(f"Set product_name: {text}")
+                    detail_provided = True
                 elif not session['details'].get('price'):
                     session['details']['price'] = text
                     logger.info(f"Set price: {text}")
+                    detail_provided = True
                 elif not session['details'].get('tagline'):
                     session['details']['tagline'] = text
                     logger.info(f"Set tagline: {text}")
+                    detail_provided = True
                 elif not session['details'].get('address'):
                     session['details']['address'] = text
                     logger.info(f"Set address: {text}")
+                    detail_provided = True
             
-            # Send updated status and next step
-            logger.info(f"Sending status update to {from_number}")
-            status_msg = "📝 Current details:\n\n"
-            status_msg += f"Company: {session['details'].get('company_name', '❌')}\n"
-            status_msg += f"Product: {session['details'].get('product_name', '❌')}\n"
-            status_msg += f"Price: {session['details'].get('price', '❌')}\n"
-            status_msg += f"Tagline: {session['details'].get('tagline', '➖')}\n"
-            status_msg += f"Address: {session['details'].get('address', '➖')}\n\n"
-            
-            # Check what's still needed
-            if not session['details'].get('company_name'):
-                status_msg += "👉 Please send your company name.\n"
-            elif not session['details'].get('product_name'):
-                status_msg += "👉 Please send your product name.\n"
-            elif not session['details'].get('price'):
-                status_msg += "👉 Please send the price.\n"
-            else:
-                status_msg += "✅ All required information received!\n\n"
-                status_msg += "To generate the marketing image, send 'generate'\n"
-                status_msg += "To add optional details (tagline, address), just send them."
-            
-            marketing_bot.waapi_client.send_message(from_number, status_msg)
+            # Only send status update if user actually provided new details
+            if detail_provided:
+                logger.info(f"Sending status update to {from_number}")
+                status_msg = "📝 Current details:\n\n"
+                status_msg += f"Company: {session['details'].get('company_name', '❌')}\n"
+                status_msg += f"Product: {session['details'].get('product_name', '❌')}\n"
+                status_msg += f"Price: {session['details'].get('price', '❌')}\n"
+                status_msg += f"Tagline: {session['details'].get('tagline', '➖')}\n"
+                status_msg += f"Address: {session['details'].get('address', '➖')}\n\n"
+                
+                # Check what's still needed
+                if not session['details'].get('company_name'):
+                    status_msg += "👉 Please send your company name.\n"
+                elif not session['details'].get('product_name'):
+                    status_msg += "👉 Please send your product name.\n"
+                elif not session['details'].get('price'):
+                    status_msg += "👉 Please send the price.\n"
+                else:
+                    status_msg += "✅ All required information received!\n\n"
+                    status_msg += "To generate the marketing image, send 'generate'\n"
+                    status_msg += "To add optional details (tagline, address), just send them."
+                
+                marketing_bot.waapi_client.send_message(from_number, status_msg)
             return
         
         # Default state - waiting for command
@@ -801,7 +848,7 @@ def handle_text_message(from_number: str, text: str):
             )
             
     except Exception as e:
-        logger.error(f"Error handling text message: {str(e)}")
+        logger.error(f"Error handling text message: {str(e)}", exc_info=True)
         try:
             marketing_bot.waapi_client.send_message(
                 from_number,
@@ -921,15 +968,60 @@ def home():
     return jsonify({
         "service": "Marketing Image Generator (WhatsApp Version)",
         "status": "running",
-        "version": "1.1",
+        "version": "1.2",
         "endpoint": "/webhook"
     })
 
 @app.route('/health')
 def health():
     """Health check endpoint for Railway"""
-    logger.debug("Health check accessed")
-    return jsonify({"status": "healthy"})
+    try:
+        # Check components health
+        health_status = {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "version": "1.2.0",
+            "components": {
+                "api": "healthy",
+                "openai": "unknown",
+                "waapi": "unknown"
+            }
+        }
+        
+        # Check OpenAI connection
+        try:
+            # Basic API validation without actually making a costly request
+            if OPENAI_API_KEY and len(OPENAI_API_KEY) > 20:
+                health_status["components"]["openai"] = "healthy"
+            else:
+                health_status["components"]["openai"] = "degraded"
+        except Exception:
+            health_status["components"]["openai"] = "unhealthy"
+            
+        # Check WaAPI connection
+        try:
+            if WAAPI_API_TOKEN and WAAPI_INSTANCE_ID:
+                health_status["components"]["waapi"] = "healthy"
+            else:
+                health_status["components"]["waapi"] = "degraded"
+        except Exception:
+            health_status["components"]["waapi"] = "unhealthy"
+            
+        # Set overall status based on components
+        if "unhealthy" in health_status["components"].values():
+            health_status["status"] = "unhealthy"
+        elif "degraded" in health_status["components"].values():
+            health_status["status"] = "degraded"
+            
+        logger.debug("Health check accessed")
+        return jsonify(health_status)
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}", exc_info=True)
+        return jsonify({
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
 
 @app.route('/images/<path:path>')
 def serve_images(path):
@@ -942,8 +1034,32 @@ def serve_images(path):
 def webhook():
     """Handle incoming WhatsApp messages via WaAPI webhook"""
     try:
+        # Check request size for security
+        content_length = request.content_length
+        if content_length and content_length > 10 * 1024 * 1024:  # 10MB limit
+            logger.warning(f"Request too large: {content_length} bytes")
+            return jsonify({"status": "error", "message": "Request too large"}), 413
+        
+        # Verify webhook secret if configured
+        if WEBHOOK_SECRET:
+            signature = request.headers.get('X-Webhook-Signature')
+            if not signature:
+                logger.warning("Missing webhook signature")
+                return jsonify({"status": "error", "message": "Missing signature"}), 401
+            
+            # Implement your signature verification here
+            # This is a placeholder for actual verification
+            # if not verify_signature(request.data, signature, WEBHOOK_SECRET):
+            #     logger.warning("Invalid webhook signature")
+            #     return jsonify({"status": "error", "message": "Invalid signature"}), 401
+        
         # Extract the webhook data
-        webhook_data = request.json
+        try:
+            webhook_data = request.json
+        except Exception as json_error:
+            logger.error(f"Invalid JSON in webhook request: {str(json_error)}")
+            return jsonify({"status": "error", "message": "Invalid JSON"}), 400
+            
         logger.info(f"Received webhook: {json.dumps(webhook_data)}")
         
         # Extract message ID to prevent duplicate processing
@@ -1035,13 +1151,60 @@ def webhook():
         return jsonify({"status": "error", "message": str(e)})
 
 ###################
+# Session cleanup function
+def cleanup_expired_sessions():
+    """Remove expired user sessions to prevent memory leaks"""
+    try:
+        current_time = datetime.now().timestamp()
+        expired_session_count = 0
+        expired_keys = []
+        
+        # Find expired sessions
+        for user_id, session in user_sessions.items():
+            last_activity = session.get('last_activity', 0)
+            if current_time - last_activity > SESSION_TIMEOUT_HOURS * 3600:
+                expired_keys.append(user_id)
+                expired_session_count += 1
+        
+        # Remove expired sessions
+        for key in expired_keys:
+            del user_sessions[key]
+            
+        if expired_session_count > 0:
+            logger.info(f"Cleaned up {expired_session_count} expired sessions")
+    except Exception as e:
+        logger.error(f"Error cleaning up sessions: {str(e)}", exc_info=True)
+
+# Add a scheduled task to clean up sessions
+def schedule_cleanup():
+    cleanup_expired_sessions()
+    # Schedule next cleanup in 1 hour
+    threading.Timer(3600, schedule_cleanup).start()
+
+###################
 # MAIN APPLICATION
 ###################
 
 if __name__ == '__main__':
+    import threading
+    
+    # Start the session cleanup scheduler
+    schedule_cleanup()
+    
     # Get port from environment variable (Railway provides this)
     port = int(os.getenv('PORT', 5000))
     
-    # Run the Flask app
-    logger.info(f"Starting Marketing Bot API (WhatsApp Version) on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=False)  # Set debug=False for production
+    # Production startup logging
+    logger.info(f"Starting Marketing Bot API (WhatsApp Version) v1.2.0 on port {port}")
+    logger.info(f"OpenAI client initialized: {OPENAI_VERSION}")
+    logger.info(f"WaAPI instance ID: {WAAPI_INSTANCE_ID}")
+    logger.info(f"Environment: {'Production' if not os.getenv('DEBUG') else 'Development'}")
+    
+    # Run the Flask app with production settings
+    app.run(
+        host='0.0.0.0', 
+        port=port,
+        debug=False,  # Always false in production
+        threaded=True,
+        use_reloader=False  # Disable reloader in production
+    )
