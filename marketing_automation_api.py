@@ -22,9 +22,9 @@ import requests
 # Load environment variables
 load_dotenv()
 
-# Configure detailed logging
+# Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,  # Set to DEBUG to catch all logs
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler()
@@ -32,11 +32,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("MarketingBotWhatsApp")
 
-# Set up debug printing function with timestamp
-def debug_print(message):
-    """Print debug message with timestamp"""
-    timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
-    print(f"[DEBUG][{timestamp}] {message}")
+# Also add print statements for important logs to ensure they appear in Railway logs
+def log_and_print(level, message):
+    if level == "INFO":
+        logger.info(message)
+    elif level == "ERROR":
+        logger.error(message)
+    elif level == "WARNING":
+        logger.warning(message)
+    elif level == "DEBUG":
+        logger.debug(message)
+    
+    # Always print to stdout for Railway logs
+    print(f"[{level}] {message}")
 
 # Create Flask app
 app = Flask(__name__, static_folder='static', template_folder='templates')
@@ -57,15 +65,14 @@ last_message_time = {}
 # Initialize OpenAI with API key from environment variables
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 if not OPENAI_API_KEY:
-    logger.error("OPENAI_API_KEY not found in environment variables!")
+    log_and_print("ERROR", "OPENAI_API_KEY not found in environment variables!")
     raise ValueError("OPENAI_API_KEY is required")
 
 # Initialize OpenAI client
 from openai import OpenAI
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
-logger.info("Using OpenAI client version")
-debug_print(f"Initialized OpenAI client with API key: {OPENAI_API_KEY[:5]}...")
-debug_print(f"OpenAI client version: {OpenAI.__version__ if hasattr(OpenAI, '__version__') else 'unknown'}")
+log_and_print("INFO", "OpenAI client initialized with API key")
+print(f"OpenAI API Key first 8 chars: {OPENAI_API_KEY[:8]}...")
 
 # WaAPI configuration - from environment variables
 WAAPI_API_TOKEN = os.getenv('WAAPI_API_TOKEN')
@@ -80,10 +87,10 @@ required_vars = {
 
 missing_vars = [var for var, value in required_vars.items() if not value]
 if missing_vars:
-    logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+    log_and_print("ERROR", f"Missing required environment variables: {', '.join(missing_vars)}")
     raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
-logger.info(f"Environment variables loaded. Instance ID: {WAAPI_INSTANCE_ID}")
+log_and_print("INFO", f"Environment variables loaded. Instance ID: {WAAPI_INSTANCE_ID}")
 
 ###################
 # PROMPT TEMPLATES
@@ -182,47 +189,36 @@ Create a professional food marketing poster as described above.
 
 class ImageGenerator:
     def __init__(self, api_key: str):
-        print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Initializing ImageGenerator with API key: {api_key[:5]}...")
-        logger.info("Initializing ImageGenerator")
+        log_and_print("INFO", "Initializing ImageGenerator")
         self.api_key = api_key
         self.client = openai_client
-        print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] OpenAI client initialized successfully")
-        logger.info(f"ImageGenerator initialized with OpenAI API - gpt-image-1 model only")
+        log_and_print("INFO", "ImageGenerator initialized with OpenAI API")
     
     def generate_marketing_image(self, product_image_path: str, product_details: Dict, product_type: str = "beverage") -> Optional[str]:
-        """Generate a marketing image using OpenAI API with gpt-image-1 model only"""
+        """Generate a marketing image using OpenAI API"""
         try:
-            # Start timing for performance tracking
-            start_time = time.time()
             product_name = product_details.get('product_name', 'product')
-            
-            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Starting image generation for {product_name} as {product_type}")
-            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Input image path: {product_image_path}")
-            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Product details: {json.dumps(product_details)}")
-            
-            logger.info(f"Starting image generation for {product_name} as {product_type}")
+            log_and_print("INFO", f"Starting image generation for {product_name} as {product_type}")
             
             # Select the appropriate prompt template
             if product_type.lower() == "beverage":
                 prompt = PromptTemplates.get_beverage_template(product_details)
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Using beverage template")
-                logger.info("Using beverage template")
+                log_and_print("INFO", "Using beverage template")
             elif product_type.lower() == "food":
                 prompt = PromptTemplates.get_food_template(product_details)
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Using food template")
-                logger.info("Using food template")
+                log_and_print("INFO", "Using food template")
             else:
                 prompt = PromptTemplates.get_master_template(product_details)
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Using master template")
-                logger.info("Using master template")
-            
-            # Print the full prompt for debugging
-            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] PROMPT: {prompt}")
+                log_and_print("INFO", "Using master template")
             
             # Generate the image
             try:
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Sending image generation request to OpenAI API with gpt-image-1 model")
-                logger.info("Sending image generation request to OpenAI API")
+                log_and_print("INFO", "Sending image generation request to OpenAI API with gpt-image-1 model")
+                print(f"[DEBUG] Full prompt: {prompt[:100]}...")  # Print first 100 chars
+                print(f"[DEBUG] Product details: {json.dumps(product_details)}")
+                print(f"[DEBUG] Product image path: {product_image_path}")
+                print(f"[DEBUG] Image exists: {os.path.exists(product_image_path)}")
+                print(f"[DEBUG] API key first 8 chars: {self.api_key[:8]}...")
                 
                 # Add retries for production reliability
                 max_retries = 3
@@ -230,122 +226,114 @@ class ImageGenerator:
                 
                 for retry in range(max_retries):
                     try:
-                        print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] API call attempt {retry+1} of {max_retries}")
+                        print(f"[DEBUG] API call attempt {retry+1} to OpenAI")
                         
-                        # Explicitly set all parameters for transparency
-                        api_params = {
-                            "model": "gpt-image-1",
-                            "prompt": prompt,
-                            "size": "1024x1024",
-                            "n": 1,
-                            "response_format": "b64_json",
-                            "quality": "low"  # Use low quality for production to save credits
-                        }
-                        print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] API parameters: {json.dumps(api_params)}")
-                        
-                        result = self.client.images.generate(**api_params)
-                        
+                        # Make API call
+                        result = self.client.images.generate(
+                            model="gpt-image-1",
+                            prompt=prompt,
+                            size="1024x1024",
+                            n=1,
+                            response_format="b64_json",
+                            quality="low"  # Use low quality for production to save credits
+                        )
+                        print(f"[DEBUG] API call successful on attempt {retry+1}")
                         # If successful, break the retry loop
-                        print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] API call successful")
                         break
                     except Exception as retry_error:
-                        print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] API call attempt {retry+1} failed: {str(retry_error)}")
-                        logger.warning(f"API call attempt {retry+1} failed: {str(retry_error)}")
+                        error_message = str(retry_error)
+                        log_and_print("WARNING", f"API call attempt {retry+1} failed: {error_message}")
+                        
+                        # Print detailed error information
+                        print(f"[ERROR] OpenAI API error details: {error_message}")
+                        print(f"[ERROR] Error type: {type(retry_error).__name__}")
+                        
+                        if "rate limit" in error_message.lower():
+                            print("[ERROR] Rate limit exceeded. Waiting longer before retry.")
+                            retry_delay = 10  # Wait longer for rate limit errors
+                        
                         if retry < max_retries - 1:
-                            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Retrying in {retry_delay} seconds...")
-                            logger.info(f"Retrying in {retry_delay} seconds...")
+                            log_and_print("INFO", f"Retrying in {retry_delay} seconds...")
                             time.sleep(retry_delay)
                             retry_delay *= 2  # Exponential backoff
                         else:
                             # Last attempt failed, re-raise the exception
-                            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] All API call retries failed")
-                            logger.error("All API call retries failed")
+                            log_and_print("ERROR", "All API call retries failed")
                             raise
                 
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] OpenAI API request completed")
-                logger.info("OpenAI API request completed")
+                log_and_print("INFO", "OpenAI API request completed")
                 
-                # Check response structure
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Response structure: hasattr(data)={hasattr(result, 'data')}, len(data)={len(result.data) if hasattr(result, 'data') else 0}")
-                if hasattr(result, 'data') and len(result.data) > 0:
-                    print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] First data item has b64_json: {hasattr(result.data[0], 'b64_json')}")
+                # Print the result structure for debugging
+                print(f"[DEBUG] OpenAI result type: {type(result)}")
+                print(f"[DEBUG] OpenAI result has data attribute: {hasattr(result, 'data')}")
+                if hasattr(result, 'data'):
+                    print(f"[DEBUG] result.data length: {len(result.data)}")
+                    if len(result.data) > 0:
+                        print(f"[DEBUG] First item type: {type(result.data[0])}")
+                        print(f"[DEBUG] First item has b64_json: {hasattr(result.data[0], 'b64_json')}")
                 
                 if hasattr(result, 'data') and len(result.data) > 0 and hasattr(result.data[0], 'b64_json'):
-                    print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Image base64 data received, decoding...")
-                    logger.info("Image base64 data received, decoding")
-                    
-                    # Get the base64 data and decode it
-                    b64_data = result.data[0].b64_json
-                    print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Base64 data length: {len(b64_data)} characters")
-                    
-                    image_bytes = base64.b64decode(b64_data)
-                    print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Decoded to {len(image_bytes)} bytes")
-                    logger.info("Image decoded successfully")
+                    log_and_print("INFO", "Image base64 data received, decoding")
+                    image_bytes = base64.b64decode(result.data[0].b64_json)
+                    log_and_print("INFO", "Image decoded successfully")
+                    print(f"[DEBUG] Decoded image bytes length: {len(image_bytes)}")
                 else:
-                    print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] ERROR: No image data in OpenAI response")
-                    logger.error("No image data in OpenAI response")
-                    if hasattr(result, 'data'):
-                        print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Response data: {result.data}")
-                    return None
+                    log_and_print("ERROR", "No image data in OpenAI response")
+                    print("[ERROR] OpenAI response structure differs from expected format")
+                    return {"error": "Failed to get image data from OpenAI response"}
                     
                 # Save the image
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
                 product_name_safe = product_details.get('product_name', 'product').replace(' ', '_')[:20]
                 output_filename = f"{product_name_safe}_{timestamp}.png"
                 output_path = os.path.join("images/output", output_filename)
+                print(f"[DEBUG] Image will be saved to: {output_path}")
+                
+                # Verify output directory exists
+                os.makedirs("images/output", exist_ok=True)
+                print(f"[DEBUG] Verified output directory exists")
                 
                 # Convert to image
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Creating image from bytes")
-                logger.info("Creating image from bytes")
-                image = Image.open(BytesIO(image_bytes))
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Image created with size: {image.size}, mode: {image.mode}")
+                log_and_print("INFO", "Creating image from bytes")
+                try:
+                    image = Image.open(BytesIO(image_bytes))
+                    print(f"[DEBUG] Image opened successfully: {image.format} {image.size}px")
+                except Exception as img_error:
+                    print(f"[ERROR] Failed to open image: {str(img_error)}")
+                    return {"error": f"Failed to open generated image: {str(img_error)}"}
                 
                 # Optionally resize for optimization
                 if image.size[0] > 1500 or image.size[1] > 1500:
-                    print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Resizing image from {image.size} to max 1500px")
-                    logger.info(f"Resizing image from {image.size} to max 1500px")
+                    log_and_print("INFO", f"Resizing image from {image.size} to max 1500px")
                     image.thumbnail((1500, 1500), Image.LANCZOS)
-                    print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Image resized to {image.size}")
+                    print(f"[DEBUG] Image resized to: {image.size}px")
                 
                 # Save the image
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Saving image to {output_path}")
-                logger.info(f"Saving image to {output_path}")
-                image.save(output_path, format="PNG", optimize=True)
+                log_and_print("INFO", f"Saving image to {output_path}")
+                try:
+                    image.save(output_path, format="PNG", optimize=True)
+                    print(f"[DEBUG] Image saved successfully as PNG")
+                except Exception as save_error:
+                    print(f"[ERROR] Failed to save image: {str(save_error)}")
+                    return {"error": f"Failed to save image: {str(save_error)}"}
                 
-                # Calculate total processing time
-                processing_time = time.time() - start_time
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Marketing image saved to {output_path}")
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Total processing time: {processing_time:.2f} seconds")
-                logger.info(f"Marketing image saved to {output_path}")
-                logger.info(f"Total image generation time: {processing_time:.2f} seconds")
-                
+                log_and_print("INFO", f"Marketing image saved to {output_path}")
                 return output_path
                 
             except Exception as api_error:
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] OpenAI API Error: {str(api_error)}")
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Error type: {type(api_error).__name__}")
-                logger.error(f"OpenAI API Error: {str(api_error)}")
+                error_message = str(api_error)
+                log_and_print("ERROR", f"OpenAI API Error: {error_message}")
+                print(f"[ERROR] Failed to generate image with OpenAI API: {error_message}")
+                print(f"[ERROR] Error type: {type(api_error).__name__}")
                 
-                # Print the full traceback for debugging
-                import traceback
-                traceback_str = traceback.format_exc()
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Traceback: {traceback_str}")
-                logger.error(f"Traceback: {traceback_str}")
-                
-                return None
+                # Return a clear error message instead of None
+                return {"error": f"OpenAI API error: {error_message}"}
                 
         except Exception as e:
-            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Error generating marketing image: {str(e)}")
-            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Error type: {type(e).__name__}")
-            logger.error(f"Error generating marketing image: {str(e)}")
-            
-            # Print the full traceback for debugging
-            import traceback
-            traceback_str = traceback.format_exc()
-            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Traceback: {traceback_str}")
-            logger.error(f"Traceback: {traceback_str}")
-            
-            return None
+            error_message = str(e)
+            log_and_print("ERROR", f"Error generating marketing image: {error_message}")
+            print(f"[ERROR] Exception in generate_marketing_image: {error_message}")
+            return {"error": f"Error in image generation process: {error_message}"}
 
 ###################
 # WAAPI WHATSAPP API
@@ -353,7 +341,7 @@ class ImageGenerator:
 
 class WaAPIClient:
     def __init__(self, api_token: str, instance_id: str):
-        logger.info(f"Initializing WaAPIClient for instance {instance_id}")
+        log_and_print("INFO", f"Initializing WaAPIClient for instance {instance_id}")
         self.api_token = api_token
         self.instance_id = instance_id
         self.api_base_url = "https://waapi.app/api/v1"
@@ -362,37 +350,37 @@ class WaAPIClient:
             "Accept": "application/json",
             "Content-Type": "application/json"
         }
-        logger.info("WaAPIClient initialized successfully")
+        log_and_print("INFO", "WaAPIClient initialized successfully")
     
     def _make_request(self, method: str, endpoint: str, data: Dict = None) -> Dict:
         """Make a request to the WaAPI API"""
         url = f"{self.api_base_url}/{endpoint}"
-        logger.info(f"Making {method} request to {endpoint}")
+        log_and_print("INFO", f"Making {method} request to {endpoint}")
         try:
             if method.lower() == "get":
                 response = requests.get(url, headers=self.headers)
             elif method.lower() == "post":
-                logger.debug(f"POST data: {json.dumps(data)}")
+                print(f"[DEBUG] POST data: {json.dumps(data)[:200]}..." if data else "None")
                 response = requests.post(url, headers=self.headers, json=data)
             elif method.lower() == "put":
                 response = requests.put(url, headers=self.headers, json=data)
             elif method.lower() == "delete":
                 response = requests.delete(url, headers=self.headers)
             else:
-                logger.error(f"Invalid method: {method}")
+                log_and_print("ERROR", f"Invalid method: {method}")
                 return {"success": False, "error": "Invalid method"}
             
             response.raise_for_status()
             result = response.json()
-            logger.debug(f"Response: {json.dumps(result)}")
+            print(f"[DEBUG] Response: {json.dumps(result)[:200]}...")
             return result
         except Exception as e:
-            logger.error(f"Error making request to WaAPI: {str(e)}")
+            log_and_print("ERROR", f"Error making request to WaAPI: {str(e)}")
             return {"success": False, "error": str(e)}
     
     def get_instance_status(self) -> Dict:
         """Get the status of the instance"""
-        logger.info("Checking instance status")
+        log_and_print("INFO", "Checking instance status")
         return self._make_request("get", f"instances/{self.instance_id}/client/status")
     
     def send_message(self, to: str, message: str) -> Dict:
@@ -403,15 +391,16 @@ class WaAPIClient:
         # Apply rate limiting
         current_time = time.time()
         if to in last_message_time and current_time - last_message_time[to] < 2:
-            logger.info(f"Rate limiting message to {to} - too soon after last message")
-            return {"success": False, "error": "Rate limited"}
+            log_and_print("INFO", f"Rate limiting message to {to} - too soon after last message")
+            time.sleep(2 - (current_time - last_message_time[to]))
+            current_time = time.time()
         
         data = {
             "chatId": to,
             "message": message
         }
         
-        logger.info(f"Sending message to {to}: {message[:50]}{'...' if len(message) > 50 else ''}")
+        log_and_print("INFO", f"Sending message to {to}: {message[:50]}{'...' if len(message) > 50 else ''}")
         result = self._make_request(
             "post", 
             f"instances/{self.instance_id}/client/action/send-message", 
@@ -419,12 +408,12 @@ class WaAPIClient:
         )
         
         if result.get("status") == "success":
-            logger.info(f"Message sent successfully to {to}")
+            log_and_print("INFO", f"Message sent successfully to {to}")
             # Update rate limiting
             last_message_time[to] = current_time
             return {"success": True, "data": result.get("data", {})}
         else:
-            logger.error(f"Error sending message: {result.get('error', 'Unknown error')}")
+            log_and_print("ERROR", f"Error sending message: {result.get('error', 'Unknown error')}")
             return {"success": False, "error": result.get("error", "Unknown error")}
     
     def send_media(self, to: str, caption: str = "", media_url: str = None, media_base64: str = None, 
@@ -436,8 +425,9 @@ class WaAPIClient:
         # Apply rate limiting
         current_time = time.time()
         if to in last_message_time and current_time - last_message_time[to] < 2:
-            logger.info(f"Rate limiting media message to {to} - too soon after last message")
-            return {"success": False, "error": "Rate limited"}
+            log_and_print("INFO", f"Rate limiting media message to {to} - too soon after last message")
+            time.sleep(2 - (current_time - last_message_time[to]))
+            current_time = time.time()
         
         data = {
             "chatId": to,
@@ -446,15 +436,15 @@ class WaAPIClient:
         
         # Add either URL or base64 data
         if media_url:
-            logger.info(f"Sending media from URL to {to}")
+            log_and_print("INFO", f"Sending media from URL to {to}")
             data["mediaUrl"] = media_url
         elif media_base64:
-            logger.info(f"Sending media from base64 to {to}")
+            log_and_print("INFO", f"Sending media from base64 to {to}")
             data["mediaBase64"] = media_base64
             # Filename is required for base64 media
             data["mediaName"] = filename or f"media_{int(datetime.now().timestamp())}.png"
         else:
-            logger.error("No media URL or base64 data provided")
+            log_and_print("ERROR", "No media URL or base64 data provided")
             return {"success": False, "error": "No media provided"}
         
         # Set if image should be sent as sticker
@@ -468,17 +458,17 @@ class WaAPIClient:
         )
         
         if result.get("status") == "success":
-            logger.info(f"Media sent successfully to {to}")
+            log_and_print("INFO", f"Media sent successfully to {to}")
             # Update rate limiting
             last_message_time[to] = current_time
             return {"success": True, "data": result.get("data", {})}
         else:
-            logger.error(f"Error sending media: {result.get('error', 'Unknown error')}")
+            log_and_print("ERROR", f"Error sending media: {result.get('error', 'Unknown error')}")
             return {"success": False, "error": result.get("error", "Unknown error")}
     
     def _format_phone_number(self, phone_number: str) -> str:
         """Format phone number to the expected format for WhatsApp"""
-        logger.debug(f"Formatting phone number: {phone_number}")
+        print(f"[DEBUG] Formatting phone number: {phone_number}")
         # Remove any non-numeric characters except the @ if it's already formatted
         if '@c.us' in phone_number:
             return phone_number
@@ -488,14 +478,14 @@ class WaAPIClient:
         
         # Format for WhatsApp: number@c.us
         result = f"{clean_number}@c.us"
-        logger.debug(f"Formatted phone number: {result}")
+        print(f"[DEBUG] Formatted phone number: {result}")
         return result
     
     def is_registered_user(self, phone_number: str) -> bool:
         """Check if a phone number is registered on WhatsApp"""
         # Format the phone number
         contact_id = self._format_phone_number(phone_number)
-        logger.info(f"Checking if {contact_id} is registered on WhatsApp")
+        log_and_print("INFO", f"Checking if {contact_id} is registered on WhatsApp")
         
         data = {
             "contactId": contact_id
@@ -509,10 +499,10 @@ class WaAPIClient:
         
         if result.get("status") == "success" and "data" in result:
             is_registered = result["data"].get("isRegisteredUser", False)
-            logger.info(f"User {contact_id} is registered: {is_registered}")
+            log_and_print("INFO", f"User {contact_id} is registered: {is_registered}")
             return is_registered
         
-        logger.error(f"Failed to check if user is registered: {result.get('error', 'Unknown error')}")
+        log_and_print("ERROR", f"Failed to check if user is registered: {result.get('error', 'Unknown error')}")
         return False
 
 ###################
@@ -521,73 +511,72 @@ class WaAPIClient:
 
 class MarketingBot:
     def __init__(self, openai_key: str, waapi_token: str, waapi_instance_id: str):
-        logger.info("Initializing MarketingBot")
+        log_and_print("INFO", "Initializing MarketingBot")
         self.image_generator = ImageGenerator(openai_key)
         self.waapi_client = WaAPIClient(waapi_token, waapi_instance_id)
-        logger.info("MarketingBot initialized with OpenAI and WaAPI")
+        log_and_print("INFO", "MarketingBot initialized with OpenAI and WaAPI")
     
     def process_request(self, user_id: str, product_image_path: str, product_details: Dict, product_type: str = "beverage") -> Dict:
         """Process a marketing image request"""
         try:
-            logger.info(f"Processing request for user {user_id}")
-            debug_print(f"Processing request for user {user_id}")
-            debug_print(f"Product image path: {product_image_path}")
-            debug_print(f"Product details: {json.dumps(product_details)}")
-            debug_print(f"Product type: {product_type}")
+            log_and_print("INFO", f"Processing request for user {user_id}")
+            print(f"[DEBUG] Product details: {json.dumps(product_details)}")
+            print(f"[DEBUG] Product image path: {product_image_path}")
+            print(f"[DEBUG] File exists check: {os.path.exists(product_image_path)}")
             
             # Check if product image exists
             if not os.path.exists(product_image_path):
-                debug_print(f"ERROR: Product image does not exist: {product_image_path}")
-                return {"success": False, "error": "Product image file not found"}
-            
-            # Check file size
-            file_size = os.path.getsize(product_image_path)
-            debug_print(f"Product image file size: {file_size} bytes")
-            
-            # Try to open the image to verify it's valid
-            try:
-                with Image.open(product_image_path) as img:
-                    debug_print(f"Image opened successfully: {img.format}, {img.size}, {img.mode}")
-            except Exception as img_error:
-                debug_print(f"Error opening image: {str(img_error)}")
+                error_msg = f"Product image not found at {product_image_path}"
+                log_and_print("ERROR", error_msg)
+                return {"success": False, "error": error_msg}
             
             # Generate marketing image
-            logger.info("Starting image generation")
-            debug_print("Starting image generation with gpt-image-1 model")
-            output_path = self.image_generator.generate_marketing_image(
+            log_and_print("INFO", "Starting image generation")
+            result = self.image_generator.generate_marketing_image(
                 product_image_path,
                 product_details,
                 product_type
             )
             
-            if output_path:
-                logger.info(f"Image generated successfully: {output_path}")
+            # Check if result is an error message (dict with error key)
+            if isinstance(result, dict) and "error" in result:
+                log_and_print("ERROR", f"Image generation failed: {result['error']}")
+                return {"success": False, "error": result["error"]}
+            
+            # Normal success case
+            if result:
+                log_and_print("INFO", f"Image generated successfully: {result}")
                 # Get the Railway app URL for serving images
                 app_url = os.getenv('RAILWAY_STATIC_URL', os.getenv('APP_URL', 'https://auto-design-production.up.railway.app'))
-                image_url = f"{app_url}/images/output/{os.path.basename(output_path)}"
-                logger.info(f"Image URL: {image_url}")
+                image_url = f"{app_url}/images/output/{os.path.basename(result)}"
+                log_and_print("INFO", f"Image URL: {image_url}")
                 
                 return {
                     "success": True,
-                    "image_path": output_path,
+                    "image_path": result,
                     "image_url": image_url
                 }
             else:
-                logger.error("Failed to generate marketing image")
+                error_msg = "Failed to generate marketing image"
+                log_and_print("ERROR", error_msg)
                 return {
                     "success": False,
-                    "error": "Failed to generate marketing image"
+                    "error": error_msg
                 }
                 
         except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
+            error_msg = str(e)
+            log_and_print("ERROR", f"Error processing request: {error_msg}")
+            print(f"[ERROR] Exception type: {type(e).__name__}")
+            print(f"[ERROR] Exception details: {error_msg}")
+            print(f"[ERROR] File exists: {os.path.exists(product_image_path)}")
             return {
                 "success": False,
-                "error": str(e)
+                "error": error_msg
             }
 
 # Initialize marketing bot
-logger.info("Initializing marketing bot with environment variables")
+log_and_print("INFO", "Initializing marketing bot with environment variables")
 marketing_bot = MarketingBot(
     openai_key=OPENAI_API_KEY,
     waapi_token=WAAPI_API_TOKEN,
@@ -601,29 +590,29 @@ marketing_bot = MarketingBot(
 def handle_text_message(from_number: str, text: str):
     """Handle incoming text messages"""
     try:
-        logger.info(f"Processing text message: '{text}' from {from_number}")
-        debug_print(f"Processing text message: '{text}' from {from_number}")
+        print(f"[DEBUG] Received text: '{text}' from {from_number}")
+        log_and_print("INFO", f"Processing text message: '{text}' from {from_number}")
         
         # Create session if not exists
         if from_number not in user_sessions:
-            logger.info(f"Creating new session for {from_number}")
-            debug_print(f"Creating new session for {from_number}")
+            log_and_print("INFO", f"Creating new session for {from_number}")
             user_sessions[from_number] = {
                 "product_image": None,
                 "details": {},
                 "state": "waiting_for_command"
             }
+            print(f"[DEBUG] New session created with state 'waiting_for_command'")
         
         session = user_sessions[from_number]
-        logger.info(f"Current session state: {session['state']}")
+        log_and_print("INFO", f"Current session state: {session['state']}")
         
         # Check for start command
         if text.lower() == 'edit':
-            logger.info(f"User {from_number} sent 'edit' command")
+            log_and_print("INFO", f"User {from_number} sent 'edit' command")
             session['state'] = 'waiting_for_image'
             session['product_image'] = None
             session['details'] = {}
-            logger.info(f"Session state changed to 'waiting_for_image'")
+            log_and_print("INFO", f"Session state changed to 'waiting_for_image'")
             
             marketing_bot.waapi_client.send_message(
                 from_number,
@@ -631,20 +620,23 @@ def handle_text_message(from_number: str, text: str):
                 "Please send your product image to begin.\n\n"
                 "After sending the image, I'll ask for details like company name, product name, price, etc."
             )
-            logger.info(f"Sent welcome message to {from_number}")
+            log_and_print("INFO", f"Sent welcome message to {from_number}")
             return
         
         # Check for generate command
         if text.lower() == 'generate':
-            logger.info(f"User {from_number} sent 'generate' command")
-            debug_print(f"User {from_number} sent 'generate' command")
-            debug_print(f"Current session state: {session['state']}")
-            debug_print(f"Session details: {json.dumps(session)}")
+            print(f"[DEBUG] 'generate' command detected from {from_number}")
+            log_and_print("INFO", f"User {from_number} sent 'generate' command")
+            
+            # Print current session state for debugging
+            print(f"[DEBUG] Current session state: {session['state']}")
+            print(f"[DEBUG] Product image path: {session.get('product_image')}")
+            print(f"[DEBUG] Details collected: {json.dumps(session.get('details', {}))}")
             
             # Validate we have all required info
             if not session.get('product_image'):
-                logger.warning(f"User {from_number} tried to generate without an image")
-                debug_print(f"Error: No product image found in session")
+                log_and_print("WARNING", f"User {from_number} tried to generate without an image")
+                print(f"[DEBUG] No product image in session")
                 marketing_bot.waapi_client.send_message(
                     from_number,
                     "Please send a product image first.\n"
@@ -662,7 +654,7 @@ def handle_text_message(from_number: str, text: str):
                 if not details.get('price'):
                     missing.append('price')
                 
-                logger.warning(f"User {from_number} tried to generate with missing details: {missing}")
+                log_and_print("WARNING", f"User {from_number} tried to generate with missing details: {missing}")
                 marketing_bot.waapi_client.send_message(
                     from_number,
                     f"Missing required details: {', '.join(missing)}\n\n"
@@ -671,29 +663,15 @@ def handle_text_message(from_number: str, text: str):
                 return
             
             # Generate the image
-            logger.info(f"Sending generation message to {from_number}")
+            log_and_print("INFO", f"Sending generation message to {from_number}")
             marketing_bot.waapi_client.send_message(
                 from_number,
-                "✨ Generating your marketing image..."
+                "✨ Generating your marketing image...\n"
+                "This may take up to 30 seconds."
             )
             
             # Process in the background
-            logger.info(f"Starting image generation process for {from_number}")
-            debug_print(f"Starting image generation process for {from_number}")
-            debug_print(f"Product image path: {session['product_image']}")
-            debug_print(f"Product details: {json.dumps(details)}")
-            
-            try:
-                # Add a check to verify the product image exists
-                if not os.path.exists(session['product_image']):
-                    debug_print(f"WARNING: Product image file does not exist: {session['product_image']}")
-                    # Create a dummy file if needed for testing
-                    with open(session['product_image'], 'wb') as f:
-                        f.write(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="))
-                    debug_print(f"Created placeholder image at: {session['product_image']}")
-            except Exception as img_check_error:
-                debug_print(f"Error checking product image: {str(img_check_error)}")
-            
+            log_and_print("INFO", f"Starting image generation process for {from_number}")
             result = marketing_bot.process_request(
                 from_number,
                 session['product_image'],
@@ -701,18 +679,45 @@ def handle_text_message(from_number: str, text: str):
             )
             
             if result['success']:
-                logger.info(f"Image generated successfully for {from_number}: {result['image_path']}")
+                log_and_print("INFO", f"Image generated successfully for {from_number}: {result['image_path']}")
                 # Get local file path
                 image_path = result['image_path']
                 
+                # Check if file exists
+                if not os.path.exists(image_path):
+                    log_and_print("ERROR", f"Generated image file not found: {image_path}")
+                    marketing_bot.waapi_client.send_message(
+                        from_number,
+                        "Sorry, there was a problem saving the generated image. Please try again."
+                    )
+                    # Reset state
+                    session['state'] = 'waiting_for_command'
+                    return
+                
                 # Read the image for base64 encoding
-                logger.info(f"Reading image file for base64 encoding: {image_path}")
-                with open(image_path, 'rb') as img_file:
-                    img_data = img_file.read()
-                    img_base64 = base64.b64encode(img_data).decode('utf-8')
+                log_and_print("INFO", f"Reading image file for base64 encoding: {image_path}")
+                print(f"[DEBUG] Checking if file exists: {os.path.exists(image_path)}")
+                print(f"[DEBUG] File size: {os.path.getsize(image_path) if os.path.exists(image_path) else 'not found'} bytes")
+                
+                try:
+                    with open(image_path, 'rb') as img_file:
+                        img_data = img_file.read()
+                        print(f"[DEBUG] Image data read: {len(img_data)} bytes")
+                        img_base64 = base64.b64encode(img_data).decode('utf-8')
+                        print(f"[DEBUG] Base64 encoding length: {len(img_base64)} characters")
+                except Exception as read_error:
+                    log_and_print("ERROR", f"Failed to read image file: {str(read_error)}")
+                    marketing_bot.waapi_client.send_message(
+                        from_number,
+                        "Sorry, I had trouble processing the generated image. Please try again."
+                    )
+                    # Reset state to allow retry
+                    session['state'] = 'waiting_for_command'
+                    return
                 
                 # Send the generated image
-                logger.info(f"Sending generated image to {from_number}")
+                log_and_print("INFO", f"Sending generated image to {from_number}")
+                print(f"[DEBUG] Sending image through WaAPI with caption")
                 media_result = marketing_bot.waapi_client.send_media(
                     from_number,
                     "🎉 Here's your marketing image!\n\n"
@@ -720,11 +725,12 @@ def handle_text_message(from_number: str, text: str):
                     media_base64=img_base64,
                     filename=os.path.basename(image_path)
                 )
+                print(f"[DEBUG] WaAPI media send result: {json.dumps(media_result)}")
                 
                 if media_result['success']:
-                    logger.info(f"Image sent successfully to {from_number}")
+                    log_and_print("INFO", f"Image sent successfully to {from_number}")
                 else:
-                    logger.error(f"Failed to send image: {media_result.get('error')}")
+                    log_and_print("ERROR", f"Failed to send image: {media_result.get('error')}")
                     # Try to send an error message
                     marketing_bot.waapi_client.send_message(
                         from_number,
@@ -733,19 +739,21 @@ def handle_text_message(from_number: str, text: str):
                 
                 # Reset state
                 session['state'] = 'waiting_for_command'
-                logger.info(f"Session state reset to 'waiting_for_command'")
+                log_and_print("INFO", f"Session state reset to 'waiting_for_command'")
             else:
-                logger.error(f"Failed to generate image: {result.get('error')}")
+                log_and_print("ERROR", f"Failed to generate image: {result.get('error')}")
                 marketing_bot.waapi_client.send_message(
                     from_number,
-                    f"Sorry, I couldn't generate the image: {result.get('error', 'Unknown error')}\n\n"
-                    "Please try again or send 'edit' to start over."
+                    f"Sorry, I couldn't generate the image. {result.get('error', '')}\n\n"
+                    "Please try again by sending 'edit'."
                 )
+                # Reset state to allow retry
+                session['state'] = 'waiting_for_command'
             return
         
         # Handle conversation flow based on state
         if session['state'] == 'waiting_for_image':
-            logger.info(f"User {from_number} sent text while waiting for image")
+            log_and_print("INFO", f"User {from_number} sent text while waiting for image")
             marketing_bot.waapi_client.send_message(
                 from_number,
                 "Please send your product image first.\n"
@@ -754,7 +762,7 @@ def handle_text_message(from_number: str, text: str):
             return
         
         elif session['state'] == 'waiting_for_details':
-            logger.info(f"User {from_number} sent details: {text}")
+            log_and_print("INFO", f"User {from_number} sent details: {text}")
             # Parse the details
             lines = text.split('\n')
             detail_provided = False
@@ -769,50 +777,50 @@ def handle_text_message(from_number: str, text: str):
                     if 'company' in key:
                         session['details']['company_name'] = value
                         detail_provided = True
-                        logger.info(f"Set company_name: {value}")
+                        log_and_print("INFO", f"Set company_name: {value}")
                     elif 'product' in key:
                         session['details']['product_name'] = value
                         detail_provided = True
-                        logger.info(f"Set product_name: {value}")
+                        log_and_print("INFO", f"Set product_name: {value}")
                     elif 'price' in key:
                         session['details']['price'] = value
                         detail_provided = True
-                        logger.info(f"Set price: {value}")
+                        log_and_print("INFO", f"Set price: {value}")
                     elif 'tagline' in key:
                         session['details']['tagline'] = value
                         detail_provided = True
-                        logger.info(f"Set tagline: {value}")
+                        log_and_print("INFO", f"Set tagline: {value}")
                     elif 'address' in key or 'location' in key:
                         session['details']['address'] = value
                         detail_provided = True
-                        logger.info(f"Set address: {value}")
+                        log_and_print("INFO", f"Set address: {value}")
             
             # If no structured details, try to interpret single line inputs
             if not detail_provided:
-                logger.info("No structured details found, interpreting as single value")
+                log_and_print("INFO", "No structured details found, interpreting as single value")
                 if not session['details'].get('company_name'):
                     session['details']['company_name'] = text
-                    logger.info(f"Set company_name: {text}")
+                    log_and_print("INFO", f"Set company_name: {text}")
                     detail_provided = True
                 elif not session['details'].get('product_name'):
                     session['details']['product_name'] = text
-                    logger.info(f"Set product_name: {text}")
+                    log_and_print("INFO", f"Set product_name: {text}")
                     detail_provided = True
                 elif not session['details'].get('price'):
                     session['details']['price'] = text
-                    logger.info(f"Set price: {text}")
+                    log_and_print("INFO", f"Set price: {text}")
                     detail_provided = True
                 elif not session['details'].get('tagline'):
                     session['details']['tagline'] = text
-                    logger.info(f"Set tagline: {text}")
+                    log_and_print("INFO", f"Set tagline: {text}")
                     detail_provided = True
                 elif not session['details'].get('address'):
                     session['details']['address'] = text
-                    logger.info(f"Set address: {text}")
+                    log_and_print("INFO", f"Set address: {text}")
                     detail_provided = True
             
             # Send updated status and next step
-            logger.info(f"Sending status update to {from_number}")
+            log_and_print("INFO", f"Sending status update to {from_number}")
             status_msg = "📝 Current details:\n\n"
             status_msg += f"Company: {session['details'].get('company_name', '❌')}\n"
             status_msg += f"Product: {session['details'].get('product_name', '❌')}\n"
@@ -837,7 +845,7 @@ def handle_text_message(from_number: str, text: str):
         
         # Default state - waiting for command
         else:
-            logger.info(f"User {from_number} sent message in default state")
+            log_and_print("INFO", f"User {from_number} sent message in default state")
             marketing_bot.waapi_client.send_message(
                 from_number,
                 "👋 Welcome to Marketing Image Generator!\n\n"
@@ -845,7 +853,8 @@ def handle_text_message(from_number: str, text: str):
             )
             
     except Exception as e:
-        logger.error(f"Error handling text message: {str(e)}")
+        log_and_print("ERROR", f"Error handling text message: {str(e)}")
+        print(f"[ERROR] Exception in handle_text_message: {str(e)}")
         try:
             marketing_bot.waapi_client.send_message(
                 from_number,
@@ -853,16 +862,19 @@ def handle_text_message(from_number: str, text: str):
                 "Send 'edit' to start over."
             )
         except Exception as send_error:
-            logger.error(f"Failed to send error message: {str(send_error)}")
+            log_and_print("ERROR", f"Failed to send error message: {str(send_error)}")
 
 def handle_image_message(from_number: str, media_data):
     """Handle incoming image messages"""
     try:
-        logger.info(f"Image received from {from_number}. Processing...")
+        log_and_print("INFO", f"Image received from {from_number}. Processing...")
+        print(f"[DEBUG] Media data present: {'Yes' if media_data else 'No'}")
+        if media_data:
+            print(f"[DEBUG] Media data keys: {list(media_data.keys()) if isinstance(media_data, dict) else 'Not a dict'}")
         
         # Create session if not exists
         if from_number not in user_sessions:
-            logger.info(f"Creating new session for {from_number}")
+            log_and_print("INFO", f"Creating new session for {from_number}")
             user_sessions[from_number] = {
                 "product_image": None,
                 "details": {},
@@ -872,11 +884,11 @@ def handle_image_message(from_number: str, media_data):
         session = user_sessions[from_number]
         
         # Debug session state
-        logger.info(f"Current session state: {session['state']}")
+        log_and_print("INFO", f"Current session state: {session['state']}")
         
         # Check if we're in the right state to receive an image
         if session['state'] != 'waiting_for_image':
-            logger.warning(f"Received image but session state is {session['state']}, not waiting_for_image")
+            log_and_print("WARNING", f"Received image but session state is {session['state']}, not waiting_for_image")
             marketing_bot.waapi_client.send_message(
                 from_number,
                 "I wasn't expecting an image right now.\n"
@@ -888,12 +900,14 @@ def handle_image_message(from_number: str, media_data):
         try:
             if media_data and media_data.get('data'):  
                 # Normal path - we have base64 data
-                logger.info("Image data found. Decoding base64 data...")
+                log_and_print("INFO", "Image data found. Decoding base64 data...")
+                print(f"[DEBUG] Base64 data length: {len(media_data['data'])}")
                 image_bytes = base64.b64decode(media_data['data'])
+                print(f"[DEBUG] Decoded image bytes length: {len(image_bytes)}")
             else:
                 # No media data in webhook - this is common with WaAPI's trial limitations
-                # Create a placeholder image for testing
-                logger.warning("No image data in webhook - creating placeholder image")
+                log_and_print("WARNING", "No image data in webhook - creating placeholder image")
+                print("[DEBUG] Creating a 1x1 placeholder image")
                 
                 # Save a placeholder image (1x1 transparent pixel)
                 image_bytes = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=")
@@ -909,14 +923,29 @@ def handle_image_message(from_number: str, media_data):
             filename = f"whatsapp_image_{from_number.replace('@c.us', '')}_{int(datetime.now().timestamp())}.jpg"
             image_path = os.path.join("images/input", filename)
             
-            logger.info(f"Saving image to {image_path}")
-            with open(image_path, 'wb') as f:
-                f.write(image_bytes)
+            log_and_print("INFO", f"Saving image to {image_path}")
+            try:
+                # Make sure the directory exists
+                os.makedirs("images/input", exist_ok=True)
+                
+                with open(image_path, 'wb') as f:
+                    f.write(image_bytes)
+                
+                print(f"[DEBUG] Image saved successfully to {image_path}")
+                print(f"[DEBUG] File exists: {os.path.exists(image_path)}")
+                print(f"[DEBUG] File size: {os.path.getsize(image_path)} bytes")
+            except Exception as save_error:
+                log_and_print("ERROR", f"Failed to save image: {str(save_error)}")
+                marketing_bot.waapi_client.send_message(
+                    from_number,
+                    "Sorry, I couldn't save your image. Please try again."
+                )
+                return
             
-            logger.info(f"Image saved to {image_path}")
+            log_and_print("INFO", f"Image saved to {image_path}")
             session['product_image'] = image_path
             session['state'] = 'waiting_for_details'
-            logger.info("Session state changed to 'waiting_for_details'")
+            log_and_print("INFO", "Session state changed to 'waiting_for_details'")
             
             marketing_bot.waapi_client.send_message(
                 from_number,
@@ -934,17 +963,19 @@ def handle_image_message(from_number: str, media_data):
                 "Price: $20\n\n"
                 "When you're ready to generate the image, send 'generate'"
             )
-            logger.info("Successfully processed image and sent response")
+            log_and_print("INFO", "Successfully processed image and sent response")
             
         except Exception as e:
-            logger.error(f"Error processing image: {str(e)}")
+            log_and_print("ERROR", f"Error processing image: {str(e)}")
+            print(f"[ERROR] Exception in image processing: {str(e)}")
             marketing_bot.waapi_client.send_message(
                 from_number,
                 "Sorry, I couldn't process your image. Please try again."
             )
             
     except Exception as e:
-        logger.error(f"Error handling image message: {str(e)}")
+        log_and_print("ERROR", f"Error handling image message: {str(e)}")
+        print(f"[ERROR] Exception in handle_image_message: {str(e)}")
         try:
             marketing_bot.waapi_client.send_message(
                 from_number,
@@ -952,7 +983,7 @@ def handle_image_message(from_number: str, media_data):
                 "Start over by sending 'edit'."
             )
         except Exception as send_error:
-            logger.error(f"Failed to send error message: {str(send_error)}")
+            log_and_print("ERROR", f"Failed to send error message: {str(send_error)}")
 
 ###################
 # FLASK ROUTES
@@ -961,7 +992,7 @@ def handle_image_message(from_number: str, media_data):
 @app.route('/')
 def home():
     """Render the home page"""
-    logger.info("Home page accessed")
+    log_and_print("INFO", "Home page accessed")
     return jsonify({
         "service": "Marketing Image Generator (WhatsApp Version)",
         "status": "running",
@@ -972,13 +1003,13 @@ def home():
 @app.route('/health')
 def health():
     """Health check endpoint for Railway"""
-    logger.debug("Health check accessed")
+    log_and_print("DEBUG", "Health check accessed")
     return jsonify({"status": "healthy"})
 
 @app.route('/images/<path:path>')
 def serve_images(path):
     """Serve images from the images directory"""
-    logger.debug(f"Serving image: {path}")
+    log_and_print("DEBUG", f"Serving image: {path}")
     directory, filename = os.path.split(path)
     return send_from_directory(os.path.join('images', directory), filename)
 
@@ -988,21 +1019,18 @@ def webhook():
     try:
         # Extract the webhook data
         webhook_data = request.json
-        logger.info(f"Received webhook: {json.dumps(webhook_data)}")
-        debug_print(f"Received webhook data: {json.dumps(webhook_data)}")
+        print(f"[DEBUG] Webhook received: {json.dumps(webhook_data)[:200]}...")
         
-        # Log request details for debugging
-        debug_print(f"Request headers: {dict(request.headers)}")
-        debug_print(f"Request method: {request.method}")
-        debug_print(f"Request content type: {request.content_type}")
-        debug_print(f"Request content length: {request.content_length}")
+        # Check if this is the bot's own message by checking fromMe flag
+        message_data = webhook_data.get('data', {}).get('message', {})
+        is_from_me = message_data.get('fromMe', False)
+        
+        # If message is from the bot itself, don't process it
+        if is_from_me:
+            print("[DEBUG] Skipping bot's own message")
+            return jsonify({"status": "success", "message": "Bot message skipped"})
         
         # Extract message ID to prevent duplicate processing
-        message_data = webhook_data.get('data', {}).get('message', {})
-        
-        # Debug the message structure
-        logger.debug(f"Message data structure: {json.dumps(message_data)}")
-        
         message_id = message_data.get('id', {})
         if isinstance(message_id, dict):
             serialized_id = message_id.get('_serialized', '')
@@ -1011,19 +1039,19 @@ def webhook():
         
         # Skip if we've already processed this message
         if serialized_id and serialized_id in processed_messages:
-            logger.info(f"Skipping duplicate message: {serialized_id}")
+            log_and_print("INFO", f"Skipping duplicate message: {serialized_id}")
             return jsonify({"status": "success", "message": "Duplicate message skipped"})
         
         # Mark as processed if it has an ID
         if serialized_id:
             processed_messages[serialized_id] = datetime.now().timestamp()
-            logger.debug(f"Added message {serialized_id} to processed cache")
+            print(f"[DEBUG] Added message {serialized_id} to processed cache")
             
             # Limit cache size by removing old entries (keep last 100)
             if len(processed_messages) > 100:
                 oldest = sorted(processed_messages.items(), key=lambda x: x[1])[0][0]
                 processed_messages.pop(oldest)
-                logger.debug(f"Removed oldest message {oldest} from cache")
+                print(f"[DEBUG] Removed oldest message {oldest} from cache")
         
         # Check if this is a message event
         if webhook_data.get('event') in ['message', 'message_create']:
@@ -1042,19 +1070,19 @@ def webhook():
                 '_data' in message_data and message_data['_data'].get('type') in ['image', 'sticker', 'video', 'document']
             )
             
-            logger.info(f"Received message from {from_number}: {body}, Media: {has_media}, Type: {message_type}")
+            log_and_print("INFO", f"Received message from {from_number}: {body}, Media: {has_media}, Type: {message_type}")
             
             # Check if the number is in the proper format
             if '@c.us' not in str(from_number):
-                logger.error(f"Invalid phone number format: {from_number}")
+                log_and_print("ERROR", f"Invalid phone number format: {from_number}")
                 return jsonify({"status": "error", "message": "Invalid phone number format"})
             
             # Try to get media data in multiple ways
             media_data = webhook_data.get('data', {}).get('media', {})
             if not media_data:
-                logger.debug("No direct media data found, checking alternative locations")
+                print("[DEBUG] No direct media data found, checking alternative locations")
                 if '_data' in message_data and message_data['_data'].get('type') in ['image', 'sticker', 'video', 'document']:
-                    logger.debug("Found media in _data")
+                    print("[DEBUG] Found media in _data")
                     # Try to extract media from message_data itself for different webhook formats
                     if hasattr(message_data, 'mediaData') or 'mediaData' in message_data:
                         media_data = message_data.get('mediaData', {})
@@ -1064,10 +1092,10 @@ def webhook():
             
             # Handle media messages
             if has_media:
-                logger.info(f"Detected media in message from {from_number}, type: {message_type}")
+                log_and_print("INFO", f"Detected media in message from {from_number}, type: {message_type}")
                 if not media_data:
                     # If webhook doesn't include media data, try to fetch it
-                    logger.info("Media indicated but no media data in webhook, will attempt download")
+                    log_and_print("INFO", "Media indicated but no media data in webhook, will attempt download")
                 
                 # Process as image regardless of empty media data - handler will check session state
                 handle_image_message(from_number, media_data)
@@ -1078,12 +1106,14 @@ def webhook():
             return jsonify({"status": "success", "message": "Text processed"})
         
         # Handle other event types if needed
-        logger.debug(f"Event {webhook_data.get('event')} processed")
+        print(f"[DEBUG] Event {webhook_data.get('event')} processed")
         return jsonify({"status": "success", "message": "Event processed"})
     
     except Exception as e:
-        logger.error(f"Webhook error: {str(e)}")
-        return jsonify({"status": "error", "message": str(e)})
+        error_message = str(e)
+        log_and_print("ERROR", f"Webhook error: {error_message}")
+        print(f"[ERROR] Exception in webhook: {error_message}")
+        return jsonify({"status": "error", "message": error_message})
 
 ###################
 # MAIN APPLICATION
@@ -1093,35 +1123,29 @@ if __name__ == '__main__':
     # Get port from environment variable (Railway provides this)
     port = int(os.getenv('PORT', 5000))
     
-    # Print system information for debugging
-    import sys
-    import platform
+    # Print environment info for debugging
+    print("-" * 50)
+    print("MARKETING BOT STARTUP")
+    print("-" * 50)
+    print(f"Python version: {os.sys.version}")
+    print(f"Working directory: {os.getcwd()}")
+    print(f"Environment variables: PORT={port}")
+    print(f"OpenAI API Key Present: {'Yes' if OPENAI_API_KEY else 'No'}")
+    print(f"WAAPI Token Present: {'Yes' if WAAPI_API_TOKEN else 'No'}")
+    print(f"WAAPI Instance ID: {WAAPI_INSTANCE_ID}")
+    print(f"Checking directories...")
     
-    debug_print(f"Python version: {sys.version}")
-    debug_print(f"Platform info: {platform.platform()}")
-    debug_print(f"Pillow version: {Image.__version__}")
-    debug_print(f"Running in directory: {os.getcwd()}")
-    debug_print(f"Environment variables: PORT={port}")
-    
-    # Check for required directories
+    # Make sure directories exist and are writable
     for directory in ['images', 'images/input', 'images/output']:
-        path = os.path.join(os.getcwd(), directory)
-        exists = os.path.exists(path)
-        is_dir = os.path.isdir(path) if exists else False
-        is_writable = os.access(path, os.W_OK) if exists else False
-        debug_print(f"Directory {path}: exists={exists}, is_dir={is_dir}, writable={is_writable}")
+        os.makedirs(directory, exist_ok=True)
+        print(f"Directory '{directory}' exists: {os.path.exists(directory)}")
     
-    # Test OpenAI connectivity
-    debug_print("Testing OpenAI connectivity...")
-    try:
-        models = openai_client.models.list()
-        debug_print(f"OpenAI connectivity test successful. Available models count: {len(models.data)}")
-        gpt_image_available = any(model.id == "gpt-image-1" for model in models.data)
-        debug_print(f"gpt-image-1 model available: {gpt_image_available}")
-    except Exception as e:
-        debug_print(f"OpenAI connectivity test failed: {str(e)}")
+    # Test PIL import
+    print(f"PIL/Pillow version: {Image.__version__ if hasattr(Image, '__version__') else 'unknown'}")
+    
+    # Log startup
+    log_and_print("INFO", f"Starting Marketing Bot API (WhatsApp Version) on port {port}")
+    print("-" * 50)
     
     # Run the Flask app
-    logger.info(f"Starting Marketing Bot API (WhatsApp Version) on port {port}")
-    debug_print(f"Starting Marketing Bot API (WhatsApp Version) on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)  # Set debug=False for production
