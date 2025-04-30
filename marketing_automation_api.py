@@ -226,11 +226,12 @@ class ImageGenerator:
                 for retry in range(max_retries):
                     try:
                         print(f"[DEBUG] API call attempt {retry+1} to OpenAI")
-                        result = self.client.images.generate(
+                        result = self.client.images.edit(
                             model="gpt-image-1",
                             prompt=prompt,
+                            image=open(product_image_path, "rb"),
+                            mask=open(mask_path, "rb"),
                             size="1024x1024",
-                            n=1,
                             quality="low"
                         )
                         print(f"[DEBUG] API call successful on attempt {retry+1}")
