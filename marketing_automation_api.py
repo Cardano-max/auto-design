@@ -62,11 +62,14 @@ processed_messages = {}
 # Store last message time for rate limiting
 last_message_time = {}
 
-# Initialize OpenAI with API key from environment variables
+# Initialize OpenAI API key
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+
 if not OPENAI_API_KEY:
-    logger.error("OPENAI_API_KEY not found in environment variables!")
+    log_and_print("ERROR", "OPENAI_API_KEY not found in environment variables!")
     raise ValueError("OPENAI_API_KEY is required")
+
+log_and_print("INFO", f"Using OpenAI API key starting with: {OPENAI_API_KEY[:8]}...")
 
 # Initialize OpenAI client
 from openai import OpenAI
