@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Marketing Image Generator - WaAPI WhatsApp Version
+Marketing Image Generator - Maytapi WhatsApp Version
 --------------------------------------------
-Production version with WaAPI WhatsApp API integration
+Production version with Maytapi WhatsApp API integration
 Configured for Railway.com deployment
 """
 
@@ -11,8 +11,9 @@ import base64
 import json
 import logging
 import time
+import traceback
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, Any, List, Union
 from PIL import Image
 from io import BytesIO
 from flask import Flask, request, jsonify, send_from_directory
@@ -77,23 +78,24 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY)
 log_and_print("INFO", "OpenAI client initialized with API key")
 print(f"OpenAI API Key starts with: {OPENAI_API_KEY[:5]}..." if OPENAI_API_KEY else "OpenAI API Key is missing!")
 
-# WaAPI configuration - from environment variables
-WAAPI_API_TOKEN = os.getenv('WAAPI_API_TOKEN')
-WAAPI_INSTANCE_ID = os.getenv('WAAPI_INSTANCE_ID')
-WEBHOOK_SECRET = os.getenv('WEBHOOK_SECRET')
+# Maytapi configuration - from environment variables
+MAYTAPI_API_TOKEN = os.getenv('MAYTAPI_API_TOKEN', 'a3da67ed-5fdf-4d80-8424-b3afdaf23e33')
+MAYTAPI_PRODUCT_ID = os.getenv('MAYTAPI_PRODUCT_ID', '40345e79-c077-432e-a91f-346451203944')
+MAYTAPI_PHONE_ID = os.getenv('MAYTAPI_PHONE_ID', '85920')
 
 # Validate required environment variables
 required_vars = {
-    'WAAPI_API_TOKEN': WAAPI_API_TOKEN,
-    'WAAPI_INSTANCE_ID': WAAPI_INSTANCE_ID
+    'MAYTAPI_API_TOKEN': MAYTAPI_API_TOKEN,
+    'MAYTAPI_PRODUCT_ID': MAYTAPI_PRODUCT_ID,
+    'MAYTAPI_PHONE_ID': MAYTAPI_PHONE_ID
 }
 
 missing_vars = [var for var, value in required_vars.items() if not value]
 if missing_vars:
-    logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+    log_and_print("ERROR", f"Missing required environment variables: {', '.join(missing_vars)}")
     raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
-logger.info(f"Environment variables loaded. Instance ID: {WAAPI_INSTANCE_ID}")
+log_and_print("INFO", f"Environment variables loaded. Product ID: {MAYTAPI_PRODUCT_ID}, Phone ID: {MAYTAPI_PHONE_ID}")
 
 ###################
 # PROMPT TEMPLATES
@@ -201,18 +203,18 @@ class ImageGenerator:
         """Generate a marketing image using OpenAI API"""
         try:
             product_name = product_details.get('product_name', 'product')
-            logger.info(f"Starting image generation for {product_name} as {product_type}")
+            log_and_print("INFO", f"Starting image generation for {product_name} as {product_type}")
             
             # Select the appropriate prompt template
             if product_type.lower() == "beverage":
                 prompt = PromptTemplates.get_beverage_template(product_details)
-                logger.info("Using beverage template")
+                log_and_print("INFO", "Using beverage template")
             elif product_type.lower() == "food":
                 prompt = PromptTemplates.get_food_template(product_details)
-                logger.info("Using food template")
+                log_and_print("INFO", "Using food template")
             else:
                 prompt = PromptTemplates.get_master_template(product_details)
-                logger.info("Using master template")
+                log_and_print("INFO", "Using master template")
             
             # Generate the image
             try:
@@ -226,13 +228,14 @@ class ImageGenerator:
                 for retry in range(max_retries):
                     try:
                         print(f"[DEBUG] API call attempt {retry+1} to OpenAI")
-                        result = self.client.images.edit(
+                        # Use simple image generation since we don't have a mask for editing
+                        result = self.client.images.generate(
                             model="gpt-image-1",
                             prompt=prompt,
-                            image=open(product_image_path, "rb"),
-                            mask=open(mask_path, "rb"),
                             size="1024x1024",
-                            quality="low"
+                            n=1,
+                            response_format="b64_json",
+                            quality="low"  # Use low quality to save credits
                         )
                         print(f"[DEBUG] API call successful on attempt {retry+1}")
                         # If successful, break the retry loop
@@ -313,202 +316,296 @@ class ImageGenerator:
                 
             except Exception as api_error:
                 error_message = str(api_error)
-                logger.error(f"OpenAI API Error: {error_message}")
+                log_and_print("ERROR", f"OpenAI API Error: {error_message}")
                 print(f"[ERROR] OpenAI API Error: {error_message}")
+                traceback.print_exc()
                 
-                # No fallback to DALL-E, only using gpt-image-1 model
-                return None
+                # Try fallback to a simpler model
+                try:
+                    log_and_print("INFO", "Attempting fallback to DALL-E 2")
+                    result = self.client.images.generate(
+                        model="dall-e-2",
+                        prompt=prompt,
+                        size="1024x1024",
+                        n=1,
+                        response_format="b64_json"
+                    )
+                    
+                    if hasattr(result, 'data') and len(result.data) > 0 and hasattr(result.data[0], 'b64_json'):
+                        log_and_print("INFO", "Fallback image generation successful")
+                        image_bytes = base64.b64decode(result.data[0].b64_json)
+                        
+                        # Save the image with fallback suffix
+                        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                        product_name_safe = product_details.get('product_name', 'product').replace(' ', '_')[:20]
+                        output_filename = f"{product_name_safe}_fallback_{timestamp}.png"
+                        output_path = os.path.join("images/output", output_filename)
+                        
+                        image = Image.open(BytesIO(image_bytes))
+                        image.save(output_path, format="PNG", optimize=True)
+                        
+                        log_and_print("INFO", f"Fallback image saved to {output_path}")
+                        return output_path
+                    else:
+                        log_and_print("ERROR", "Fallback image generation failed")
+                        return None
+                except Exception as fallback_error:
+                    log_and_print("ERROR", f"Fallback generation failed: {str(fallback_error)}")
+                    traceback.print_exc()
+                    return None
                 
         except Exception as e:
-            logger.error(f"Error generating marketing image: {str(e)}")
+            log_and_print("ERROR", f"Error generating marketing image: {str(e)}")
+            traceback.print_exc()
             return None
 
 ###################
-# WAAPI WHATSAPP API
+# MAYTAPI WHATSAPP API
 ###################
 
-class WaAPIClient:
-    def __init__(self, api_token: str, instance_id: str):
-        logger.info(f"Initializing WaAPIClient for instance {instance_id}")
+class MaytapiClient:
+    def __init__(self, product_id: str, api_token: str, phone_id: str):
+        log_and_print("INFO", f"Initializing MaytapiClient with product ID: {product_id}, phone ID: {phone_id}")
+        self.product_id = product_id
         self.api_token = api_token
-        self.instance_id = instance_id
-        self.api_base_url = "https://waapi.app/api/v1"
+        self.phone_id = phone_id
+        self.api_base_url = f"https://api.maytapi.com/api/{product_id}"
         self.headers = {
-            "Authorization": f"Bearer {self.api_token}",
-            "Accept": "application/json",
+            "x-maytapi-key": self.api_token,
             "Content-Type": "application/json"
         }
-        logger.info("WaAPIClient initialized successfully")
+        log_and_print("INFO", "MaytapiClient initialized successfully")
+        
+        # Test connection to ensure credentials are valid
+        self._test_connection()
+    
+    def _test_connection(self):
+        """Test the API connection to ensure credentials are valid"""
+        try:
+            # Checking phone status is a simple API call to verify credentials
+            response = self._make_request("GET", f"/{self.phone_id}/status")
+            if response.get("success"):
+                log_and_print("INFO", "Maytapi connection test successful")
+                print(f"[DEBUG] Phone status: {json.dumps(response)}")
+            else:
+                log_and_print("WARNING", f"Maytapi connection test returned unsuccessful: {json.dumps(response)}")
+        except Exception as e:
+            log_and_print("WARNING", f"Maytapi connection test failed: {str(e)}")
+            # We'll continue anyway, as this is just a test
     
     def _make_request(self, method: str, endpoint: str, data: Dict = None) -> Dict:
-        """Make a request to the WaAPI API"""
-        url = f"{self.api_base_url}/{endpoint}"
-        logger.info(f"Making {method} request to {endpoint}")
+        """Make a request to the Maytapi API"""
+        url = f"{self.api_base_url}{endpoint}"
+        log_and_print("INFO", f"Making {method} request to {url}")
+        print(f"[DEBUG] Headers: {json.dumps(self.headers)}")
+        if data:
+            print(f"[DEBUG] Request data: {json.dumps(data)}")
+        
         try:
-            if method.lower() == "get":
+            if method.upper() == "GET":
                 response = requests.get(url, headers=self.headers)
-            elif method.lower() == "post":
-                logger.debug(f"POST data: {json.dumps(data)}")
+            elif method.upper() == "POST":
                 response = requests.post(url, headers=self.headers, json=data)
-            elif method.lower() == "put":
-                response = requests.put(url, headers=self.headers, json=data)
-            elif method.lower() == "delete":
-                response = requests.delete(url, headers=self.headers)
             else:
-                logger.error(f"Invalid method: {method}")
+                log_and_print("ERROR", f"Invalid method: {method}")
                 return {"success": False, "error": "Invalid method"}
             
-            response.raise_for_status()
-            result = response.json()
-            logger.debug(f"Response: {json.dumps(result)}")
+            # Log response status
+            print(f"[DEBUG] Response status code: {response.status_code}")
+            
+            # Try to get JSON response
+            try:
+                result = response.json()
+                print(f"[DEBUG] Response JSON: {json.dumps(result)[:500]}...")
+            except Exception as json_error:
+                log_and_print("ERROR", f"Failed to parse JSON response: {str(json_error)}")
+                return {"success": False, "error": f"Invalid JSON response: {response.text}"}
+            
+            # Check for API errors
+            if not result.get("success", False) and "error" in result:
+                log_and_print("ERROR", f"API error: {result.get('error')}")
+            
             return result
         except Exception as e:
-            logger.error(f"Error making request to WaAPI: {str(e)}")
+            log_and_print("ERROR", f"Error making request to Maytapi API: {str(e)}")
+            traceback.print_exc()
             return {"success": False, "error": str(e)}
     
-    def get_instance_status(self) -> Dict:
-        """Get the status of the instance"""
-        logger.info("Checking instance status")
-        return self._make_request("get", f"instances/{self.instance_id}/client/status")
-    
-    def send_message(self, to: str, message: str) -> Dict:
-        """Send a text message via WhatsApp"""
-        # Format phone number to WhatsApp format if needed
-        to = self._format_phone_number(to)
+    def send_message(self, to_number: str, message: str, typing: bool = True) -> Dict:
+        """Send a text message via WhatsApp
         
+        Args:
+            to_number: The recipient's phone number (with country code, no special chars)
+            message: The text message to send
+            typing: Whether to show typing indicator before sending
+            
+        Returns:
+            Dict with success status and data
+        """
         # Apply rate limiting
         current_time = time.time()
-        if to in last_message_time and current_time - last_message_time[to] < 2:
-            logger.info(f"Rate limiting message to {to} - too soon after last message")
-            return {"success": False, "error": "Rate limited"}
+        if to_number in last_message_time and current_time - last_message_time[to_number] < 2:
+            log_and_print("INFO", f"Rate limiting message to {to_number} - too soon after last message")
+            time.sleep(2 - (current_time - last_message_time[to_number]))
+        
+        # Clean the phone number - only digits, no special chars
+        to_number = self._clean_phone_number(to_number)
         
         data = {
-            "chatId": to,
+            "to_number": to_number,
+            "type": "text",
             "message": message
         }
         
-        logger.info(f"Sending message to {to}: {message[:50]}{'...' if len(message) > 50 else ''}")
-        result = self._make_request(
-            "post", 
-            f"instances/{self.instance_id}/client/action/send-message", 
-            data
-        )
+        # Add typing indicator if requested
+        if typing:
+            data["typing"] = "typing"
+            data["duration"] = 2  # 2 seconds of typing
         
-        if result.get("status") == "success":
-            logger.info(f"Message sent successfully to {to}")
+        log_and_print("INFO", f"Sending message to {to_number}: {message[:50]}{'...' if len(message) > 50 else ''}")
+        result = self._make_request("POST", f"/{self.phone_id}/sendMessage", data)
+        
+        if result.get("success"):
+            log_and_print("INFO", f"Message sent successfully to {to_number}")
             # Update rate limiting
-            last_message_time[to] = current_time
+            last_message_time[to_number] = time.time()
             return {"success": True, "data": result.get("data", {})}
         else:
-            logger.error(f"Error sending message: {result.get('error', 'Unknown error')}")
+            log_and_print("ERROR", f"Error sending message: {result.get('error', 'Unknown error')}")
             return {"success": False, "error": result.get("error", "Unknown error")}
     
-    def send_media(self, to: str, caption: str = "", media_url: str = None, media_base64: str = None, 
-                  filename: str = None, is_sticker: bool = False) -> Dict:
-        """Send a media message via WhatsApp"""
-        # Format phone number to WhatsApp format if needed
-        to = self._format_phone_number(to)
+    def send_media(self, to_number: str, caption: str = "", media_url: str = None, 
+                   media_base64: str = None, filename: str = None) -> Dict:
+        """Send a media message via WhatsApp
         
+        Args:
+            to_number: The recipient's phone number
+            caption: Optional text caption for the media
+            media_url: URL of the media (either this or media_base64 must be provided)
+            media_base64: Base64-encoded media data
+            filename: Filename for the media (required for base64)
+            
+        Returns:
+            Dict with success status and data
+        """
         # Apply rate limiting
         current_time = time.time()
-        if to in last_message_time and current_time - last_message_time[to] < 2:
-            logger.info(f"Rate limiting media message to {to} - too soon after last message")
-            return {"success": False, "error": "Rate limited"}
+        if to_number in last_message_time and current_time - last_message_time[to_number] < 2:
+            log_and_print("INFO", f"Rate limiting media message to {to_number} - too soon after last message")
+            time.sleep(2 - (current_time - last_message_time[to_number]))
+        
+        # Clean the phone number - only digits, no special chars
+        to_number = self._clean_phone_number(to_number)
         
         data = {
-            "chatId": to,
-            "mediaCaption": caption
+            "to_number": to_number,
+            "type": "media",
+            "text": caption  # Maytapi uses 'text' for caption
         }
         
         # Add either URL or base64 data
         if media_url:
-            logger.info(f"Sending media from URL to {to}")
-            data["mediaUrl"] = media_url
+            log_and_print("INFO", f"Sending media from URL to {to_number}")
+            data["message"] = media_url
         elif media_base64:
-            logger.info(f"Sending media from base64 to {to}")
-            data["mediaBase64"] = media_base64
-            # Filename is required for base64 media
-            data["mediaName"] = filename or f"media_{int(datetime.now().timestamp())}.png"
+            log_and_print("INFO", f"Sending media from base64 to {to_number}")
+            data["message"] = f"data:image/png;base64,{media_base64}"
+            # Set filename if provided
+            if filename:
+                data["filename"] = filename
         else:
-            logger.error("No media URL or base64 data provided")
+            log_and_print("ERROR", "No media URL or base64 data provided")
             return {"success": False, "error": "No media provided"}
         
-        # Set if image should be sent as sticker
-        if is_sticker:
-            data["asSticker"] = True
-            
-        result = self._make_request(
-            "post", 
-            f"instances/{self.instance_id}/client/action/send-media", 
-            data
-        )
+        result = self._make_request("POST", f"/{self.phone_id}/sendMessage", data)
         
-        if result.get("status") == "success":
-            logger.info(f"Media sent successfully to {to}")
+        if result.get("success"):
+            log_and_print("INFO", f"Media sent successfully to {to_number}")
             # Update rate limiting
-            last_message_time[to] = current_time
+            last_message_time[to_number] = time.time()
             return {"success": True, "data": result.get("data", {})}
         else:
-            logger.error(f"Error sending media: {result.get('error', 'Unknown error')}")
+            log_and_print("ERROR", f"Error sending media: {result.get('error', 'Unknown error')}")
             return {"success": False, "error": result.get("error", "Unknown error")}
     
-    def _format_phone_number(self, phone_number: str) -> str:
-        """Format phone number to the expected format for WhatsApp"""
-        logger.debug(f"Formatting phone number: {phone_number}")
-        # Remove any non-numeric characters except the @ if it's already formatted
-        if '@c.us' in phone_number:
-            return phone_number
+    def _clean_phone_number(self, phone_number: str) -> str:
+        """Clean a phone number to contain only digits with country code
+        
+        Args:
+            phone_number: The phone number to clean
             
-        # Strip any non-numeric characters (like +, spaces, etc.)
+        Returns:
+            Cleaned phone number with only digits, preserving country code
+        """
+        # If already in Maytapi format, return as is
+        if '@c.us' in phone_number:
+            # Extract just the numbers from Maytapi format
+            return phone_number.split('@')[0]
+        
+        # Remove any non-numeric characters
         clean_number = ''.join(filter(str.isdigit, phone_number))
         
-        # Format for WhatsApp: number@c.us
-        result = f"{clean_number}@c.us"
-        logger.debug(f"Formatted phone number: {result}")
-        return result
-    
-    def is_registered_user(self, phone_number: str) -> bool:
-        """Check if a phone number is registered on WhatsApp"""
-        # Format the phone number
-        contact_id = self._format_phone_number(phone_number)
-        logger.info(f"Checking if {contact_id} is registered on WhatsApp")
+        # Ensure it has country code (this is simplified, might need more sophistication)
+        if len(clean_number) < 10:
+            log_and_print("WARNING", f"Phone number too short, might be missing country code: {clean_number}")
         
+        return clean_number
+    
+    def check_phone_number(self, phone_number: str) -> bool:
+        """Check if a phone number is registered on WhatsApp
+        
+        Args:
+            phone_number: The phone number to check
+            
+        Returns:
+            Boolean indicating if the number is registered
+        """
+        # Clean the phone number
+        clean_number = self._clean_phone_number(phone_number)
+        
+        # Use the checkPhones endpoint
         data = {
-            "contactId": contact_id
+            "numbers": [clean_number]
         }
         
-        result = self._make_request(
-            "post", 
-            f"instances/{self.instance_id}/client/action/is-registered-user", 
-            data
-        )
+        result = self._make_request("POST", f"/{self.phone_id}/checkPhones", data)
         
-        if result.get("status") == "success" and "data" in result:
-            is_registered = result["data"].get("isRegisteredUser", False)
-            logger.info(f"User {contact_id} is registered: {is_registered}")
-            return is_registered
+        if result.get("success") and "data" in result:
+            # Check the first number's validity
+            numbers_data = result["data"]
+            if numbers_data and len(numbers_data) > 0:
+                is_valid = numbers_data[0].get("valid", False)
+                log_and_print("INFO", f"Phone number {clean_number} is valid on WhatsApp: {is_valid}")
+                return is_valid
         
-        logger.error(f"Failed to check if user is registered: {result.get('error', 'Unknown error')}")
-        return False
+        log_and_print("WARNING", f"Failed to check if phone number is valid: {result.get('error', 'Unknown error')}")
+        # Default to True to prevent blocking legitimate numbers if check fails
+        return True
 
 ###################
 # MARKETING BOT
 ###################
 
 class MarketingBot:
-    def __init__(self, openai_key: str, waapi_token: str, waapi_instance_id: str):
-        logger.info("Initializing MarketingBot")
+    def __init__(self, openai_key: str, maytapi_product_id: str, maytapi_api_token: str, maytapi_phone_id: str):
+        log_and_print("INFO", "Initializing MarketingBot")
         self.image_generator = ImageGenerator(openai_key)
-        self.waapi_client = WaAPIClient(waapi_token, waapi_instance_id)
-        logger.info("MarketingBot initialized with OpenAI and WaAPI")
+        self.whatsapp_client = MaytapiClient(
+            product_id=maytapi_product_id,
+            api_token=maytapi_api_token,
+            phone_id=maytapi_phone_id
+        )
+        log_and_print("INFO", "MarketingBot initialized with OpenAI and Maytapi")
     
     def process_request(self, user_id: str, product_image_path: str, product_details: Dict, product_type: str = "beverage") -> Dict:
         """Process a marketing image request"""
         try:
-            logger.info(f"Processing request for user {user_id}")
+            log_and_print("INFO", f"Processing request for user {user_id}")
+            print(f"[DEBUG] Product details: {json.dumps(product_details)}")
+            print(f"[DEBUG] Product image path: {product_image_path}, exists: {os.path.exists(product_image_path)}")
             
             # Generate marketing image
-            logger.info("Starting image generation")
+            log_and_print("INFO", "Starting image generation")
             output_path = self.image_generator.generate_marketing_image(
                 product_image_path,
                 product_details,
@@ -516,11 +613,11 @@ class MarketingBot:
             )
             
             if output_path:
-                logger.info(f"Image generated successfully: {output_path}")
+                log_and_print("INFO", f"Image generated successfully: {output_path}")
                 # Get the Railway app URL for serving images
                 app_url = os.getenv('RAILWAY_STATIC_URL', os.getenv('APP_URL', 'https://auto-design-production.up.railway.app'))
                 image_url = f"{app_url}/images/output/{os.path.basename(output_path)}"
-                logger.info(f"Image URL: {image_url}")
+                log_and_print("INFO", f"Image URL: {image_url}")
                 
                 return {
                     "success": True,
@@ -528,25 +625,27 @@ class MarketingBot:
                     "image_url": image_url
                 }
             else:
-                logger.error("Failed to generate marketing image")
+                log_and_print("ERROR", "Failed to generate marketing image")
                 return {
                     "success": False,
                     "error": "Failed to generate marketing image"
                 }
                 
         except Exception as e:
-            logger.error(f"Error processing request: {str(e)}")
+            log_and_print("ERROR", f"Error processing request: {str(e)}")
+            traceback.print_exc()
             return {
                 "success": False,
                 "error": str(e)
             }
 
 # Initialize marketing bot
-logger.info("Initializing marketing bot with environment variables")
+log_and_print("INFO", "Initializing marketing bot with environment variables")
 marketing_bot = MarketingBot(
     openai_key=OPENAI_API_KEY,
-    waapi_token=WAAPI_API_TOKEN,
-    waapi_instance_id=WAAPI_INSTANCE_ID
+    maytapi_product_id=MAYTAPI_PRODUCT_ID,
+    maytapi_api_token=MAYTAPI_API_TOKEN,
+    maytapi_phone_id=MAYTAPI_PHONE_ID
 )
 
 ###################
@@ -570,23 +669,23 @@ def handle_text_message(from_number: str, text: str):
             print(f"[DEBUG] New session created with state 'waiting_for_command'")
         
         session = user_sessions[from_number]
-        logger.info(f"Current session state: {session['state']}")
+        log_and_print("INFO", f"Current session state: {session['state']}")
         
         # Check for start command
         if text.lower() == 'edit':
-            logger.info(f"User {from_number} sent 'edit' command")
+            log_and_print("INFO", f"User {from_number} sent 'edit' command")
             session['state'] = 'waiting_for_image'
             session['product_image'] = None
             session['details'] = {}
-            logger.info(f"Session state changed to 'waiting_for_image'")
+            log_and_print("INFO", f"Session state changed to 'waiting_for_image'")
             
-            marketing_bot.waapi_client.send_message(
+            marketing_bot.whatsapp_client.send_message(
                 from_number,
                 "Welcome to Marketing Image Editor! 📸\n\n"
                 "Please send your product image to begin.\n\n"
                 "After sending the image, I'll ask for details like company name, product name, price, etc."
             )
-            logger.info(f"Sent welcome message to {from_number}")
+            log_and_print("INFO", f"Sent welcome message to {from_number}")
             return
         
         # Check for generate command
@@ -603,7 +702,7 @@ def handle_text_message(from_number: str, text: str):
             if not session.get('product_image'):
                 log_and_print("WARNING", f"User {from_number} tried to generate without an image")
                 print(f"[DEBUG] No product image in session")
-                marketing_bot.waapi_client.send_message(
+                marketing_bot.whatsapp_client.send_message(
                     from_number,
                     "Please send a product image first.\n"
                     "To start, send 'edit'."
@@ -620,8 +719,8 @@ def handle_text_message(from_number: str, text: str):
                 if not details.get('price'):
                     missing.append('price')
                 
-                logger.warning(f"User {from_number} tried to generate with missing details: {missing}")
-                marketing_bot.waapi_client.send_message(
+                log_and_print("WARNING", f"User {from_number} tried to generate with missing details: {missing}")
+                marketing_bot.whatsapp_client.send_message(
                     from_number,
                     f"Missing required details: {', '.join(missing)}\n\n"
                     "Please provide all required information."
@@ -629,14 +728,15 @@ def handle_text_message(from_number: str, text: str):
                 return
             
             # Generate the image
-            logger.info(f"Sending generation message to {from_number}")
-            marketing_bot.waapi_client.send_message(
+            log_and_print("INFO", f"Sending generation message to {from_number}")
+            marketing_bot.whatsapp_client.send_message(
                 from_number,
-                "✨ Generating your marketing image..."
+                "✨ Generating your marketing image...\n"
+                "This may take up to 30 seconds."
             )
             
-            # Process in the background
-            logger.info(f"Starting image generation process for {from_number}")
+            # Process the request
+            log_and_print("INFO", f"Starting image generation process for {from_number}")
             result = marketing_bot.process_request(
                 from_number,
                 session['product_image'],
@@ -644,14 +744,22 @@ def handle_text_message(from_number: str, text: str):
             )
             
             if result['success']:
-                logger.info(f"Image generated successfully for {from_number}: {result['image_path']}")
+                log_and_print("INFO", f"Image generated successfully for {from_number}: {result['image_path']}")
                 # Get local file path
                 image_path = result['image_path']
                 
+                # Verify the file exists
+                if not os.path.exists(image_path):
+                    log_and_print("ERROR", f"Generated image file not found: {image_path}")
+                    marketing_bot.whatsapp_client.send_message(
+                        from_number,
+                        "Sorry, there was an error saving the generated image. Please try again."
+                    )
+                    return
+                
                 # Read the image for base64 encoding
                 log_and_print("INFO", f"Reading image file for base64 encoding: {image_path}")
-                print(f"[DEBUG] Checking if file exists: {os.path.exists(image_path)}")
-                print(f"[DEBUG] File size: {os.path.getsize(image_path) if os.path.exists(image_path) else 'not found'} bytes")
+                print(f"[DEBUG] File size: {os.path.getsize(image_path)} bytes")
                 
                 try:
                     with open(image_path, 'rb') as img_file:
@@ -660,8 +768,9 @@ def handle_text_message(from_number: str, text: str):
                         img_base64 = base64.b64encode(img_data).decode('utf-8')
                         print(f"[DEBUG] Base64 encoding length: {len(img_base64)} characters")
                 except Exception as read_error:
-                    print(f"[ERROR] Failed to read image file: {str(read_error)}")
-                    marketing_bot.waapi_client.send_message(
+                    log_and_print("ERROR", f"Failed to read image file: {str(read_error)}")
+                    traceback.print_exc()
+                    marketing_bot.whatsapp_client.send_message(
                         from_number,
                         "Sorry, I had trouble processing the generated image. Please try again."
                     )
@@ -669,32 +778,32 @@ def handle_text_message(from_number: str, text: str):
                 
                 # Send the generated image
                 log_and_print("INFO", f"Sending generated image to {from_number}")
-                print(f"[DEBUG] Sending image through WaAPI with caption")
-                media_result = marketing_bot.waapi_client.send_media(
-                    from_number,
-                    "🎉 Here's your marketing image!\n\n"
-                    "To create another image, send 'edit' again.",
+                print(f"[DEBUG] Sending image with base64 data and caption")
+                media_result = marketing_bot.whatsapp_client.send_media(
+                    to_number=from_number,
+                    caption="🎉 Here's your marketing image!\n\n"
+                            "To create another image, send 'edit' again.",
                     media_base64=img_base64,
                     filename=os.path.basename(image_path)
                 )
-                print(f"[DEBUG] WaAPI media send result: {json.dumps(media_result)}")
+                print(f"[DEBUG] Maytapi media send result: {json.dumps(media_result)}")
                 
                 if media_result['success']:
-                    logger.info(f"Image sent successfully to {from_number}")
+                    log_and_print("INFO", f"Image sent successfully to {from_number}")
                 else:
-                    logger.error(f"Failed to send image: {media_result.get('error')}")
+                    log_and_print("ERROR", f"Failed to send image: {media_result.get('error')}")
                     # Try to send an error message
-                    marketing_bot.waapi_client.send_message(
+                    marketing_bot.whatsapp_client.send_message(
                         from_number,
                         "I created your marketing image but couldn't send it. Please try again by sending 'edit'."
                     )
                 
                 # Reset state
                 session['state'] = 'waiting_for_command'
-                logger.info(f"Session state reset to 'waiting_for_command'")
+                log_and_print("INFO", f"Session state reset to 'waiting_for_command'")
             else:
-                logger.error(f"Failed to generate image: {result.get('error')}")
-                marketing_bot.waapi_client.send_message(
+                log_and_print("ERROR", f"Failed to generate image: {result.get('error')}")
+                marketing_bot.whatsapp_client.send_message(
                     from_number,
                     f"Sorry, I couldn't generate the image: {result.get('error', 'Unknown error')}\n\n"
                     "Please try again or send 'edit' to start over."
@@ -703,8 +812,8 @@ def handle_text_message(from_number: str, text: str):
         
         # Handle conversation flow based on state
         if session['state'] == 'waiting_for_image':
-            logger.info(f"User {from_number} sent text while waiting for image")
-            marketing_bot.waapi_client.send_message(
+            log_and_print("INFO", f"User {from_number} sent text while waiting for image")
+            marketing_bot.whatsapp_client.send_message(
                 from_number,
                 "Please send your product image first.\n"
                 "I'm waiting for an image file."
@@ -712,7 +821,7 @@ def handle_text_message(from_number: str, text: str):
             return
         
         elif session['state'] == 'waiting_for_details':
-            logger.info(f"User {from_number} sent details: {text}")
+            log_and_print("INFO", f"User {from_number} sent details: {text}")
             # Parse the details
             lines = text.split('\n')
             detail_provided = False
@@ -727,50 +836,50 @@ def handle_text_message(from_number: str, text: str):
                     if 'company' in key:
                         session['details']['company_name'] = value
                         detail_provided = True
-                        logger.info(f"Set company_name: {value}")
+                        log_and_print("INFO", f"Set company_name: {value}")
                     elif 'product' in key:
                         session['details']['product_name'] = value
                         detail_provided = True
-                        logger.info(f"Set product_name: {value}")
+                        log_and_print("INFO", f"Set product_name: {value}")
                     elif 'price' in key:
                         session['details']['price'] = value
                         detail_provided = True
-                        logger.info(f"Set price: {value}")
+                        log_and_print("INFO", f"Set price: {value}")
                     elif 'tagline' in key:
                         session['details']['tagline'] = value
                         detail_provided = True
-                        logger.info(f"Set tagline: {value}")
+                        log_and_print("INFO", f"Set tagline: {value}")
                     elif 'address' in key or 'location' in key:
                         session['details']['address'] = value
                         detail_provided = True
-                        logger.info(f"Set address: {value}")
+                        log_and_print("INFO", f"Set address: {value}")
             
             # If no structured details, try to interpret single line inputs
             if not detail_provided:
-                logger.info("No structured details found, interpreting as single value")
+                log_and_print("INFO", "No structured details found, interpreting as single value")
                 if not session['details'].get('company_name'):
                     session['details']['company_name'] = text
-                    logger.info(f"Set company_name: {text}")
+                    log_and_print("INFO", f"Set company_name: {text}")
                     detail_provided = True
                 elif not session['details'].get('product_name'):
                     session['details']['product_name'] = text
-                    logger.info(f"Set product_name: {text}")
+                    log_and_print("INFO", f"Set product_name: {text}")
                     detail_provided = True
                 elif not session['details'].get('price'):
                     session['details']['price'] = text
-                    logger.info(f"Set price: {text}")
+                    log_and_print("INFO", f"Set price: {text}")
                     detail_provided = True
                 elif not session['details'].get('tagline'):
                     session['details']['tagline'] = text
-                    logger.info(f"Set tagline: {text}")
+                    log_and_print("INFO", f"Set tagline: {text}")
                     detail_provided = True
                 elif not session['details'].get('address'):
                     session['details']['address'] = text
-                    logger.info(f"Set address: {text}")
+                    log_and_print("INFO", f"Set address: {text}")
                     detail_provided = True
             
             # Send updated status and next step
-            logger.info(f"Sending status update to {from_number}")
+            log_and_print("INFO", f"Sending status update to {from_number}")
             status_msg = "📝 Current details:\n\n"
             status_msg += f"Company: {session['details'].get('company_name', '❌')}\n"
             status_msg += f"Product: {session['details'].get('product_name', '❌')}\n"
@@ -790,37 +899,41 @@ def handle_text_message(from_number: str, text: str):
                 status_msg += "To generate the marketing image, send 'generate'\n"
                 status_msg += "To add optional details (tagline, address), just send them."
             
-            marketing_bot.waapi_client.send_message(from_number, status_msg)
+            marketing_bot.whatsapp_client.send_message(from_number, status_msg)
             return
         
         # Default state - waiting for command
         else:
-            logger.info(f"User {from_number} sent message in default state")
-            marketing_bot.waapi_client.send_message(
+            log_and_print("INFO", f"User {from_number} sent message in default state")
+            marketing_bot.whatsapp_client.send_message(
                 from_number,
                 "👋 Welcome to Marketing Image Generator!\n\n"
                 "To create a marketing image, send 'edit' to start."
             )
             
     except Exception as e:
-        logger.error(f"Error handling text message: {str(e)}")
+        log_and_print("ERROR", f"Error handling text message: {str(e)}")
+        traceback.print_exc()
         try:
-            marketing_bot.waapi_client.send_message(
+            marketing_bot.whatsapp_client.send_message(
                 from_number,
                 "Sorry, an error occurred. Please try again.\n"
                 "Send 'edit' to start over."
             )
         except Exception as send_error:
-            logger.error(f"Failed to send error message: {str(send_error)}")
+            log_and_print("ERROR", f"Failed to send error message: {str(send_error)}")
 
 def handle_image_message(from_number: str, media_data):
     """Handle incoming image messages"""
     try:
-        logger.info(f"Image received from {from_number}. Processing...")
+        log_and_print("INFO", f"Image received from {from_number}. Processing...")
+        print(f"[DEBUG] Media data type: {type(media_data)}")
+        if isinstance(media_data, dict):
+            print(f"[DEBUG] Media data keys: {list(media_data.keys())}")
         
         # Create session if not exists
         if from_number not in user_sessions:
-            logger.info(f"Creating new session for {from_number}")
+            log_and_print("INFO", f"Creating new session for {from_number}")
             user_sessions[from_number] = {
                 "product_image": None,
                 "details": {},
@@ -830,53 +943,75 @@ def handle_image_message(from_number: str, media_data):
         session = user_sessions[from_number]
         
         # Debug session state
-        logger.info(f"Current session state: {session['state']}")
+        log_and_print("INFO", f"Current session state: {session['state']}")
         
         # Check if we're in the right state to receive an image
         if session['state'] != 'waiting_for_image':
-            logger.warning(f"Received image but session state is {session['state']}, not waiting_for_image")
-            marketing_bot.waapi_client.send_message(
+            log_and_print("WARNING", f"Received image but session state is {session['state']}, not waiting_for_image")
+            marketing_bot.whatsapp_client.send_message(
                 from_number,
                 "I wasn't expecting an image right now.\n"
                 "To start the process, please send 'edit' first."
             )
             return
         
-        # Process the image from media_data (base64 encoded)
+        # Process the image from media_data
         try:
-            if media_data and media_data.get('data'):  
-                # Normal path - we have base64 data
-                logger.info("Image data found. Decoding base64 data...")
-                image_bytes = base64.b64decode(media_data['data'])
-            else:
-                # No media data in webhook - this is common with WaAPI's trial limitations
-                # Create a placeholder image for testing
-                logger.warning("No image data in webhook - creating placeholder image")
+            image_bytes = None
+            
+            # Try to extract image data from various possible formats
+            if media_data:
+                # Try direct data field first
+                if isinstance(media_data, dict) and 'data' in media_data:
+                    log_and_print("INFO", "Found image data in 'data' field")
+                    image_bytes = base64.b64decode(media_data['data'])
+                # Try mimetype field next
+                elif isinstance(media_data, dict) and 'mimetype' in media_data and 'body' in media_data:
+                    log_and_print("INFO", "Found image data in 'body' field with mimetype")
+                    image_bytes = base64.b64decode(media_data['body'])
+                # Try for Maytapi-specific format
+                elif isinstance(media_data, dict) and 'file' in media_data:
+                    log_and_print("INFO", "Found image data in Maytapi 'file' field")
+                    if isinstance(media_data['file'], str):
+                        # Handle base64-encoded data
+                        if media_data['file'].startswith('data:'):
+                            # Extract base64 part after the comma
+                            base64_data = media_data['file'].split(',', 1)[1]
+                            image_bytes = base64.b64decode(base64_data)
+                        # Handle URL
+                        elif media_data['file'].startswith('http'):
+                            response = requests.get(media_data['file'])
+                            image_bytes = response.content
                 
-                # Save a placeholder image (1x1 transparent pixel)
+            # If we couldn't get image data, use a placeholder
+            if not image_bytes:
+                log_and_print("WARNING", "Could not extract image data - creating placeholder image")
+                # Create a simple placeholder image (1x1 transparent pixel)
                 image_bytes = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=")
                 
                 # Let the user know about the limitation
-                marketing_bot.waapi_client.send_message(
+                marketing_bot.whatsapp_client.send_message(
                     from_number,
-                    "⚠️ I received your image but couldn't access its data due to trial account limitations.\n\n"
-                    "I'll continue with a placeholder image for testing purposes."
+                    "⚠️ I received your image but couldn't access its data.\n\n"
+                    "I'll continue with a placeholder image for now. Your marketing image will still be generated based on your details."
                 )
             
             # Save the image
-            filename = f"whatsapp_image_{from_number.replace('@c.us', '')}_{int(datetime.now().timestamp())}.jpg"
+            filename = f"whatsapp_image_{from_number.replace('@c.us', '').replace('+', '')}_{int(datetime.now().timestamp())}.jpg"
             image_path = os.path.join("images/input", filename)
             
-            logger.info(f"Saving image to {image_path}")
+            log_and_print("INFO", f"Saving image to {image_path}")
             with open(image_path, 'wb') as f:
                 f.write(image_bytes)
             
-            logger.info(f"Image saved to {image_path}")
+            log_and_print("INFO", f"Image saved to {image_path}")
+            print(f"[DEBUG] Image size: {os.path.getsize(image_path)} bytes")
+            
             session['product_image'] = image_path
             session['state'] = 'waiting_for_details'
-            logger.info("Session state changed to 'waiting_for_details'")
+            log_and_print("INFO", "Session state changed to 'waiting_for_details'")
             
-            marketing_bot.waapi_client.send_message(
+            marketing_bot.whatsapp_client.send_message(
                 from_number,
                 "✅ Product image received!\n\n"
                 "Now please provide the following details:\n\n"
@@ -892,25 +1027,27 @@ def handle_image_message(from_number: str, media_data):
                 "Price: $20\n\n"
                 "When you're ready to generate the image, send 'generate'"
             )
-            logger.info("Successfully processed image and sent response")
+            log_and_print("INFO", "Successfully processed image and sent response")
             
         except Exception as e:
-            logger.error(f"Error processing image: {str(e)}")
-            marketing_bot.waapi_client.send_message(
+            log_and_print("ERROR", f"Error processing image: {str(e)}")
+            traceback.print_exc()
+            marketing_bot.whatsapp_client.send_message(
                 from_number,
                 "Sorry, I couldn't process your image. Please try again."
             )
             
     except Exception as e:
-        logger.error(f"Error handling image message: {str(e)}")
+        log_and_print("ERROR", f"Error handling image message: {str(e)}")
+        traceback.print_exc()
         try:
-            marketing_bot.waapi_client.send_message(
+            marketing_bot.whatsapp_client.send_message(
                 from_number,
                 "Sorry, I couldn't process your image. Please try again.\n"
                 "Start over by sending 'edit'."
             )
         except Exception as send_error:
-            logger.error(f"Failed to send error message: {str(send_error)}")
+            log_and_print("ERROR", f"Failed to send error message: {str(send_error)}")
 
 ###################
 # FLASK ROUTES
@@ -919,7 +1056,7 @@ def handle_image_message(from_number: str, media_data):
 @app.route('/')
 def home():
     """Render the home page"""
-    logger.info("Home page accessed")
+    log_and_print("INFO", "Home page accessed")
     return jsonify({
         "service": "Marketing Image Generator (WhatsApp Version)",
         "status": "running",
@@ -930,110 +1067,123 @@ def home():
 @app.route('/health')
 def health():
     """Health check endpoint for Railway"""
-    logger.debug("Health check accessed")
-    return jsonify({"status": "healthy"})
+    log_and_print("DEBUG", "Health check accessed")
+    return jsonify({
+        "status": "healthy", 
+        "timestamp": datetime.now().isoformat(),
+        "openai": OPENAI_API_KEY is not None,
+        "maytapi": all([MAYTAPI_API_TOKEN, MAYTAPI_PRODUCT_ID, MAYTAPI_PHONE_ID])
+    })
 
 @app.route('/images/<path:path>')
 def serve_images(path):
     """Serve images from the images directory"""
-    logger.debug(f"Serving image: {path}")
+    log_and_print("DEBUG", f"Serving image: {path}")
     directory, filename = os.path.split(path)
     return send_from_directory(os.path.join('images', directory), filename)
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Handle incoming WhatsApp messages via WaAPI webhook"""
+    """Handle incoming WhatsApp messages via Maytapi webhook"""
     try:
         # Extract the webhook data
         webhook_data = request.json
-        logger.info(f"Received webhook: {json.dumps(webhook_data)}")
+        log_and_print("INFO", f"Received webhook data of type: {type(webhook_data)}")
+        print(f"[DEBUG] Webhook data: {json.dumps(webhook_data)[:500]}...")
+        
+        # Check if we have a valid message structure
+        if not webhook_data or not isinstance(webhook_data, dict):
+            log_and_print("ERROR", "Invalid webhook data format")
+            return jsonify({"status": "error", "message": "Invalid webhook data format"})
+        
+        # Extract message data based on Maytapi webhook format
+        # Sample webhook format:
+        # {
+        #   "type": "message",
+        #   "user": {
+        #     "id": "905301234567@c.us",
+        #     "name": "905301234567",
+        #     "phone": "905301234567"
+        #   },
+        #   "message": {
+        #     "id": "true_123456@c.us_***",
+        #     "text": "test",
+        #     "type": "text|image|video|audio|document",
+        #     "fromMe": false
+        #   },
+        #   "conversation": "905301234567@c.us",
+        #   "phoneId": 25312
+        # }
+        
+        # Extract the message type and phone number
+        message_type = webhook_data.get('type', '')
+        if message_type != 'message':
+            log_and_print("INFO", f"Ignoring non-message event: {message_type}")
+            return jsonify({"status": "success", "message": "Non-message event ignored"})
+        
+        # Extract user and message data
+        user_data = webhook_data.get('user', {})
+        message_data = webhook_data.get('message', {})
+        
+        # Extract sender info
+        from_number = user_data.get('id', '')  # Format: 905301234567@c.us
+        phone_number = user_data.get('phone', '')  # Format: 905301234567
+        
+        # Use phone number if id is not available
+        if not from_number and phone_number:
+            from_number = f"{phone_number}@c.us"
+        
+        if not from_number:
+            log_and_print("ERROR", "No sender phone number in webhook data")
+            return jsonify({"status": "error", "message": "No sender phone number"})
+        
+        # Check if message is from the bot itself
+        is_from_me = message_data.get('fromMe', False)
+        if is_from_me:
+            log_and_print("INFO", "Ignoring message from the bot itself")
+            return jsonify({"status": "success", "message": "Bot message ignored"})
         
         # Extract message ID to prevent duplicate processing
-        message_data = webhook_data.get('data', {}).get('message', {})
-        
-        # Debug the message structure
-        logger.debug(f"Message data structure: {json.dumps(message_data)}")
-        
-        message_id = message_data.get('id', {})
-        if isinstance(message_id, dict):
-            serialized_id = message_id.get('_serialized', '')
-        else:
-            serialized_id = str(message_id)
+        message_id = message_data.get('id', '')
         
         # Skip if we've already processed this message
-        if serialized_id and serialized_id in processed_messages:
-            logger.info(f"Skipping duplicate message: {serialized_id}")
+        if message_id and message_id in processed_messages:
+            log_and_print("INFO", f"Skipping duplicate message: {message_id}")
             return jsonify({"status": "success", "message": "Duplicate message skipped"})
         
         # Mark as processed if it has an ID
-        if serialized_id:
-            processed_messages[serialized_id] = datetime.now().timestamp()
-            logger.debug(f"Added message {serialized_id} to processed cache")
+        if message_id:
+            processed_messages[message_id] = datetime.now().timestamp()
             
             # Limit cache size by removing old entries (keep last 100)
             if len(processed_messages) > 100:
                 oldest = sorted(processed_messages.items(), key=lambda x: x[1])[0][0]
                 processed_messages.pop(oldest)
-                logger.debug(f"Removed oldest message {oldest} from cache")
         
-        # Check if this is a message event
-        if webhook_data.get('event') in ['message', 'message_create']:
-            # Extract message details - safer parsing with fallbacks
-            message_type = message_data.get('type', '')
-            from_number = message_data.get('from', '')
-            # Handle None values properly when parsing body
-            raw_body = message_data.get('body')
-            body = raw_body.strip().lower() if isinstance(raw_body, str) else ''
-            
-            # Check for media in multiple ways
-            has_media = (
-                message_data.get('hasMedia', False) or 
-                message_type in ['image', 'sticker', 'video', 'document'] or
-                'mediaData' in message_data or
-                '_data' in message_data and message_data['_data'].get('type') in ['image', 'sticker', 'video', 'document']
-            )
-            
-            logger.info(f"Received message from {from_number}: {body}, Media: {has_media}, Type: {message_type}")
-            
-            # Check if the number is in the proper format
-            if '@c.us' not in str(from_number):
-                logger.error(f"Invalid phone number format: {from_number}")
-                return jsonify({"status": "error", "message": "Invalid phone number format"})
-            
-            # Try to get media data in multiple ways
-            media_data = webhook_data.get('data', {}).get('media', {})
-            if not media_data:
-                logger.debug("No direct media data found, checking alternative locations")
-                if '_data' in message_data and message_data['_data'].get('type') in ['image', 'sticker', 'video', 'document']:
-                    logger.debug("Found media in _data")
-                    # Try to extract media from message_data itself for different webhook formats
-                    if hasattr(message_data, 'mediaData') or 'mediaData' in message_data:
-                        media_data = message_data.get('mediaData', {})
-                    elif hasattr(message_data, 'mimetype') or 'mimetype' in message_data:
-                        # It might be directly in the message
-                        media_data = message_data
-            
-            # Handle media messages
-            if has_media:
-                logger.info(f"Detected media in message from {from_number}, type: {message_type}")
-                if not media_data:
-                    # If webhook doesn't include media data, try to fetch it
-                    logger.info("Media indicated but no media data in webhook, will attempt download")
-                
-                # Process as image regardless of empty media data - handler will check session state
-                handle_image_message(from_number, media_data)
-                return jsonify({"status": "success", "message": "Media processed"})
-                
-            # Handle text messages
+        # Extract message content
+        content_type = message_data.get('type', '')
+        
+        # Handle media messages
+        if content_type in ['image', 'video', 'document', 'audio']:
+            log_and_print("INFO", f"Detected media message from {from_number}, type: {content_type}")
+            # Process as image
+            handle_image_message(from_number, message_data)
+            return jsonify({"status": "success", "message": "Media processed"})
+        
+        # Handle text messages
+        if content_type == 'text':
+            body = message_data.get('text', '')
+            log_and_print("INFO", f"Detected text message from {from_number}: {body}")
             handle_text_message(from_number, body)
             return jsonify({"status": "success", "message": "Text processed"})
         
-        # Handle other event types if needed
-        logger.debug(f"Event {webhook_data.get('event')} processed")
-        return jsonify({"status": "success", "message": "Event processed"})
+        # Fallback for other message types
+        log_and_print("WARNING", f"Unhandled message type: {content_type}")
+        return jsonify({"status": "success", "message": f"Unhandled message type: {content_type}"})
     
     except Exception as e:
-        logger.error(f"Webhook error: {str(e)}")
+        log_and_print("ERROR", f"Webhook error: {str(e)}")
+        traceback.print_exc()
         return jsonify({"status": "error", "message": str(e)})
 
 ###################
@@ -1052,8 +1202,9 @@ if __name__ == '__main__':
     print(f"Working directory: {os.getcwd()}")
     print(f"Environment variables: PORT={port}")
     print(f"OpenAI API Key Present: {'Yes' if OPENAI_API_KEY else 'No'}")
-    print(f"WAAPI Token Present: {'Yes' if WAAPI_API_TOKEN else 'No'}")
-    print(f"WAAPI Instance ID: {WAAPI_INSTANCE_ID}")
+    print(f"Maytapi API Token Present: {'Yes' if MAYTAPI_API_TOKEN else 'No'}")
+    print(f"Maytapi Product ID: {MAYTAPI_PRODUCT_ID}")
+    print(f"Maytapi Phone ID: {MAYTAPI_PHONE_ID}")
     print(f"Checking directories...")
     
     # Make sure directories exist and are writable
