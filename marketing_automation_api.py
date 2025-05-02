@@ -4,7 +4,9 @@ Marketing Image Generator - Maytapi WhatsApp Version
 --------------------------------------------
 Production version with Maytapi WhatsApp API integration
 Configured for Railway.com deployment
-URGENT FIX: Fixed welcome message and image processing issues
+URGENT FIXES:
+- Fixed welcome message and image processing issues
+- Added cancel command to exit session flow
 """
 
 import os
@@ -1173,6 +1175,23 @@ class MarketingBot:
             
             log_and_print("INFO", f"Current session state for user {user_id}: {session['state']}")
             
+            # Check for cancel command first (this works in any state)
+            if text.lower() == 'cancel':
+                log_and_print("INFO", f"User {user_id} sent 'cancel' command")
+                
+                # End current session
+                self.session_manager.end_session(from_number)
+                
+                # Send confirmation
+                self.whatsapp_client.send_message(
+                    from_number,
+                    "✅ Process cancelled.\n\n"
+                    "You can start again by sending 'edit' whenever you're ready."
+                )
+                
+                log_and_print("INFO", f"Session cancelled for user {user_id}")
+                return
+            
             # Check for edit command - this starts a new session
             if text.lower() == 'edit':
                 log_and_print("INFO", f"User {user_id} sent 'edit' command")
@@ -1189,7 +1208,8 @@ class MarketingBot:
                     from_number,
                     "Welcome to Marketing Image Editor! 📸\n\n"
                     "Please send your product image to begin.\n\n"
-                    "After sending the image, I'll ask for details like company name, product name, price, etc."
+                    "After sending the image, I'll ask for details like company name, product name, price, etc.\n\n"
+                    "You can type 'cancel' at any time to exit the process."
                 )
                 
                 log_and_print("INFO", f"Sent welcome message to {from_number}")
@@ -1212,7 +1232,8 @@ class MarketingBot:
                     self.whatsapp_client.send_message(
                         from_number,
                         "Please send a product image first.\n"
-                        "To start, send 'edit'."
+                        "To start, send 'edit'.\n\n"
+                        "Or type 'cancel' to exit the process."
                     )
                     return
                 
@@ -1230,7 +1251,8 @@ class MarketingBot:
                     self.whatsapp_client.send_message(
                         from_number,
                         f"Missing required details: {', '.join(missing)}\n\n"
-                        "Please provide all required information."
+                        "Please provide all required information.\n\n"
+                        "Type 'cancel' if you want to exit the process."
                     )
                     return
                 
@@ -1316,7 +1338,8 @@ class MarketingBot:
                 self.whatsapp_client.send_message(
                     from_number,
                     "Please send your product image first.\n"
-                    "I'm waiting for an image file."
+                    "I'm waiting for an image file.\n\n"
+                    "Type 'cancel' if you want to exit the process."
                 )
                 return
             
@@ -1416,6 +1439,8 @@ class MarketingBot:
                     status_msg += "To generate the marketing image, send 'generate'\n"
                     status_msg += "To add optional details (tagline, address), just send them."
                 
+                status_msg += "\n\nYou can type 'cancel' at any time to exit the process."
+                
                 self.whatsapp_client.send_message(from_number, status_msg)
                 return
             
@@ -1492,7 +1517,8 @@ class MarketingBot:
                 self.whatsapp_client.send_message(
                     from_number,
                     "I wasn't expecting an image right now.\n"
-                    "To start the process, please send 'edit' first."
+                    "To start the process, please send 'edit' first.\n\n"
+                    "You can also type 'cancel' to exit the current process."
                 )
                 return
             
@@ -1511,7 +1537,8 @@ class MarketingBot:
                     self.whatsapp_client.send_message(
                         from_number,
                         "⚠️ I received your image but couldn't access its data.\n\n"
-                        "I'll continue with a placeholder image for now. Your marketing image will still be generated based on your details."
+                        "I'll continue with a placeholder image for now. Your marketing image will still be generated based on your details.\n\n"
+                        "Type 'cancel' if you'd like to exit the process and try again later."
                     )
                 
                 # Generate a unique filename and save the image
@@ -1522,7 +1549,8 @@ class MarketingBot:
                     log_and_print("ERROR", f"Failed to save image for user {user_id}")
                     self.whatsapp_client.send_message(
                         from_number,
-                        "Sorry, I couldn't process your image. Please try again by sending a different image."
+                        "Sorry, I couldn't process your image. Please try again by sending a different image.\n\n"
+                        "You can type 'cancel' to exit the process."
                     )
                     return
                 
@@ -1547,7 +1575,8 @@ class MarketingBot:
                     "Company: ABC Corp\n"
                     "Product: Premium Coffee\n"
                     "Price: $20\n\n"
-                    "When you're ready to generate the image, send 'generate'"
+                    "When you're ready to generate the image, send 'generate'\n\n"
+                    "You can type 'cancel' at any time to exit the process."
                 )
                 
                 log_and_print("INFO", f"Successfully processed image for user {user_id}")
@@ -1558,7 +1587,7 @@ class MarketingBot:
                 self.whatsapp_client.send_message(
                     from_number,
                     "Sorry, I couldn't process your image. Please try again.\n"
-                    "Send 'edit' to start over."
+                    "Send 'edit' to start over or 'cancel' to exit."
                 )
                 
         except Exception as e:
@@ -1568,7 +1597,7 @@ class MarketingBot:
                 self.whatsapp_client.send_message(
                     from_number,
                     "Sorry, I couldn't process your image. Please try again.\n"
-                    "Start over by sending 'edit'."
+                    "Start over by sending 'edit' or type 'cancel' to exit."
                 )
             except Exception as send_error:
                 log_and_print("ERROR", f"Failed to send error message: {str(send_error)}")
@@ -1601,12 +1630,20 @@ class MarketingBot:
                     "welcomed": True
                 })
             else:
-                # Just send a helpful reminder
-                self.whatsapp_client.send_message(
-                    from_number,
-                    "I received your voice message, but I work better with text.\n\n"
-                    "To create a marketing image, please send 'edit'."
-                )
+                # Check if user is in an active flow
+                if session["state"] != "waiting_for_command":
+                    self.whatsapp_client.send_message(
+                        from_number,
+                        "I received your voice message, but I need text input for this process.\n\n"
+                        "You can type 'cancel' to exit the current process if needed."
+                    )
+                else:
+                    # Just send a helpful reminder
+                    self.whatsapp_client.send_message(
+                        from_number,
+                        "I received your voice message, but I work better with text.\n\n"
+                        "To create a marketing image, please send 'edit'."
+                    )
             
             log_and_print("INFO", f"Audio message handled for user {user_id}")
             
