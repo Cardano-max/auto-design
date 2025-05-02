@@ -375,7 +375,14 @@ IMPORTANT: Ensure the entire original subject is visible and not cropped in any 
                 try:
                     with Image.open(BytesIO(image_bytes)) as generated_img:
                         generated_width, generated_height = generated_img.size
-                        log_and_print("INFO", f"Generated image dimensions: {generated_width}x{generated_height}")
+                        generated_format = generated_img.format
+                        generated_mode = generated_img.mode
+                        
+                        log_and_print("INFO", f"Raw OpenAI image properties:")
+                        log_and_print("INFO", f"- Dimensions: {generated_width}x{generated_height}")
+                        log_and_print("INFO", f"- Format: {generated_format}")
+                        log_and_print("INFO", f"- Mode: {generated_mode}")
+                        log_and_print("INFO", f"- Size: {len(image_bytes)} bytes")
                         
                         # Check if aspect ratio is significantly different from original
                         if original_width > 0 and original_height > 0:
@@ -1398,7 +1405,7 @@ class MarketingBot:
         self.image_handler = ImageHandler(self.whatsapp_client)
         log_and_print("INFO", "MarketingBot initialized with all components")
     
-    def process_request(self, user_id: str, from_number: str, product_image_path: str, product_details: Dict, product_type: str = "beverage") -> Dict:
+    def process_request(self, user_id: str, from_number: str, product_image_path: str, product_details: Dict, product_type: str = "beverage", share_link_only: bool = False) -> Dict:
         """Process a marketing image request with improved error handling
         
         Args:
@@ -1407,6 +1414,7 @@ class MarketingBot:
             product_image_path: Path to product image
             product_details: Dictionary of product details
             product_type: Type of product (beverage, food, etc.)
+            share_link_only: If True, share a link to the image instead of the image itself
             
         Returns:
             Dictionary with process results
@@ -1488,6 +1496,17 @@ class MarketingBot:
                 image_url = f"{app_url}/images/output/{os.path.basename(output_path)}"
                 log_and_print("INFO", f"Image URL: {image_url}")
                 
+                # If share_link_only is True, just send the link instead of the image
+                if share_link_only:
+                    log_and_print("INFO", f"Sharing image URL instead of image for user {user_id}")
+                    self.whatsapp_client.send_message(
+                        from_number,
+                        f"🎉 Your marketing image is ready!\n\n"
+                        f"View and download your image here:\n{image_url}\n\n"
+                        f"This link will be available for the next 24 hours.\n\n"
+                        f"To create another image, send 'edit' again."
+                    )
+                
                 return {
                     "success": True,
                     "image_path": output_path,
@@ -1564,24 +1583,69 @@ class MarketingBot:
                 log_and_print("INFO", f"Session cancelled for user {user_id}")
                 return
             
+            # Check for 'linkmode' command to toggle sharing images as links
+            link_commands = ['linkmode', 'share link', 'link mode', 'use link']
+            if any(cmd in text.lower() for cmd in link_commands):
+                log_and_print("INFO", f"User {user_id} toggled link mode")
+                
+                # Get current value or default to False
+                current_link_mode = session.get('share_link_only', False)
+                new_link_mode = not current_link_mode
+                
+                # Update session with the new value
+                self.session_manager.update_session(from_number, {
+                    "share_link_only": new_link_mode
+                })
+                
+                # Send confirmation
+                if new_link_mode:
+                    self.whatsapp_client.send_message(
+                        from_number,
+                        "✅ Link mode enabled.\n\n"
+                        "Your generated images will be shared as links instead of directly sending the images.\n"
+                        "This can help prevent cropping or compression by WhatsApp.\n\n"
+                        "Send 'linkmode' again to toggle this setting."
+                    )
+                else:
+                    self.whatsapp_client.send_message(
+                        from_number,
+                        "✅ Link mode disabled.\n\n"
+                        "Your generated images will be sent directly to you on WhatsApp.\n\n"
+                        "Send 'linkmode' again to toggle this setting."
+                    )
+                
+                log_and_print("INFO", f"Link mode set to {new_link_mode} for user {user_id}")
+                return
+            
             # Check for edit command - this starts a new session
             if text.lower() == 'edit':
                 log_and_print("INFO", f"User {user_id} sent 'edit' command")
+                
+                # Keep share_link_only setting when starting a new session
+                share_link_only = session.get('share_link_only', False)
                 
                 # Update session to waiting for image
                 self.session_manager.update_session(from_number, {
                     "state": "waiting_for_image",
                     "product_image": None,
-                    "details": {}
+                    "details": {},
+                    "share_link_only": share_link_only  # Preserve this setting
                 })
                 
                 # Send welcome message
+                welcome_msg = "Welcome to Marketing Image Editor! 📸\n\n"
+                welcome_msg += "Please send your product image to begin.\n\n"
+                welcome_msg += "After sending the image, I'll ask for details like company name, product name, price, etc.\n\n"
+                
+                # Add info about current link mode
+                if share_link_only:
+                    welcome_msg += "🔗 Link mode is enabled. Your image will be shared as a link.\n\n"
+                
+                welcome_msg += "You can type 'cancel' at any time to exit the process."
+                
                 self.whatsapp_client.send_message(
                     from_number,
-                    "Welcome to Marketing Image Editor! 📸\n\n"
-                    "Please send your product image to begin.\n\n"
-                    "After sending the image, I'll ask for details like company name, product name, price, etc.\n\n"
-                    "You can type 'cancel' at any time to exit the process."
+                    welcome_msg
                 )
                 
                 log_and_print("INFO", f"Sent welcome message to user {user_id}")
@@ -1638,11 +1702,16 @@ class MarketingBot:
                 
                 # Process the request
                 log_and_print("INFO", f"Starting image generation process for user {user_id}")
+                # Get share_link_only setting from session
+                share_link_only = session.get('share_link_only', False)
+                log_and_print("INFO", f"Share link only mode: {share_link_only}")
+                
                 result = self.process_request(
                     user_id,
                     from_number,
                     session['product_image'],
-                    details
+                    details,
+                    share_link_only=share_link_only
                 )
                 
                 if result['success']:
