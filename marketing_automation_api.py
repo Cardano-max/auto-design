@@ -224,13 +224,40 @@ class ImageGenerator:
                 edit_prompt = PromptTemplates.get_master_template(product_details)
                 
             # Add mask-specific instructions to ensure background-only editing
-            mask_instruction = "Using the provided mask (which preserves the subject exactly), overlay these marketing elements on the background only:\n"
-            mask_instruction += "- Company name, product name, price badge, and tagline in the specified positions\n"
-            mask_instruction += "Do not alter the main subject at all. Leave its dimensions unchanged. Only paint in the masked-out areas."
-            
+            mask_instruction = """EDITING INSTRUCTIONS (Using provided mask):
+
+1. PRESERVE THE PRODUCT EXACTLY:
+   - The white areas in the mask represent the product - DO NOT modify these areas in ANY way
+   - Maintain 100% of the product's original appearance, including all details, colors, textures, reflections
+   - Preserve the product's exact position, scale, and orientation - NO resizing or repositioning
+
+2. BACKGROUND REPLACEMENT (Black areas in mask):
+   - Replace ONLY the black areas in the mask (the background) with a professional marketing design
+   - Create a complementary background that enhances but doesn't compete with the product
+   - Ensure smooth transitions between the preserved product and the new background
+
+3. BRANDING ELEMENT PLACEMENT (In background only):
+   - Company name: Position "{product_details.get('company_name', '')}" at the top in a premium, legible font
+   - Product name: Place "{product_details.get('product_name', '')}" below the product in bold, prominent typography
+   - Price: Position "{product_details.get('price', '')}" in an eye-catching circular badge in the bottom right corner
+   - Tagline: Add "{product_details.get('tagline', '')}" between company name and product image in elegant styling
+   - Address: Include "{product_details.get('address', '')}" in smaller font at the bottom for reference
+
+4. PROFESSIONAL AESTHETIC:
+   - Use a color palette that complements the product's colors
+   - Apply subtle shadows or lighting effects to integrate the product naturally
+   - Ensure all text is positioned for maximum readability
+   - Create a balanced, visually appealing composition that draws attention to the product"""
+
             # If logo is provided, include it in the instructions
             if logo_image_path:
-                mask_instruction += "\n- Include the provided logo in the top-left corner"
+                mask_instruction += """
+
+5. LOGO PLACEMENT:
+   - Position the provided logo in the top-left corner of the image
+   - Size the logo appropriately (not too large or small) - approximately 10-15% of the image width
+   - Ensure the logo maintains its proper proportions and quality
+   - Create visual harmony between the logo and other design elements"""
                 
             # Combine the edit prompt with mask instructions
             edit_prompt = f"{edit_prompt}\n\n{mask_instruction}"
@@ -292,7 +319,26 @@ class ImageGenerator:
             
             # STEP 1: First API call to generate the mask
             log_and_print("INFO", "STEP 1: Generating mask using GPT-image-1")
-            mask_prompt = "Generate a precise mask for the main subject of this image. Keep the subject exactly the same (no changes), and output a white-on-black mask with the subject in white and everything else in black."
+            mask_prompt = """Generate a high-precision binary mask for the main product/subject in this image with the following specifications:
+
+1. OUTPUT FORMAT: Create a pure black and white mask where:
+   - The main product/subject is PURE WHITE (255,255,255)
+   - The background and all non-product elements are PURE BLACK (0,0,0)
+   - No gray values or anti-aliasing at edges - use hard boundaries
+
+2. SUBJECT IDENTIFICATION:
+   - The main subject is the central product (food/beverage/item) that needs to be preserved exactly
+   - Include ALL parts of the product (including any packaging, container, garnish, or accessories that are part of the product)
+   - For beverages: include the entire glass/cup/container and any straws/garnishes
+   - For food: include the plate/bowl/container and any visible garnishes directly on the food
+
+3. MASK PRECISION:
+   - Create pixel-perfect boundaries around the subject
+   - Capture fine details like product edges, transparent elements, and thin structures
+   - Ensure the mask covers 100% of the product with NO missing areas
+   - Do not include shadows cast by the product (unless they're integral to the product's appearance)
+
+This mask will be used to protect the product while allowing background replacement, so accuracy is critical."""
             
             for retry in range(max_retries):
                 try:
