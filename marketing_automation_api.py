@@ -36,6 +36,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("MarketingBotWhatsApp")
 
+# Optional Imgur API variables for public image hosting
+IMGUR_CLIENT_ID = os.getenv('IMGUR_CLIENT_ID', '')
+USE_IMGUR = IMGUR_CLIENT_ID != ''
+
 # Also add print statements for important logs to ensure they appear in Railway logs
 def log_and_print(level, message):
     if level == "INFO":
@@ -413,10 +417,32 @@ IMPORTANT: Ensure the entire original subject is visible and not cropped in any 
             with open(output_path, 'wb') as f:
                 f.write(image_bytes)
             log_and_print("INFO", f"Marketing image saved to {output_path} without additional processing")
+            
+            # Try to upload to Imgur for a public link
+            public_url = None
+            if USE_IMGUR:
+                try:
+                    public_url = upload_image_to_imgur(image_bytes)
+                    if public_url:
+                        log_and_print("INFO", f"Public image URL: {public_url}")
+                except Exception as imgur_err:
+                    log_and_print("ERROR", f"Error uploading to Imgur: {str(imgur_err)}")
+            
+            # Generate local URL for the image
+            app_url = os.getenv('RAILWAY_STATIC_URL', os.getenv('APP_URL', 'https://auto-design-production.up.railway.app'))
+            local_url = f"{app_url}/images/output/{os.path.basename(output_path)}"
+            
+            # Store URLs in image metadata
+            image_info = {
+                "local_url": local_url,
+                "public_url": public_url,
+                "path": output_path,
+                "timestamp": timestamp
+            }
 
             processing_time = time.time() - start_time
             log_and_print("INFO", f"Total processing time: {processing_time:.2f} seconds")
-            return output_path
+            return output_path, image_info
                 
         except Exception as e:
             log_and_print("ERROR", f"Error generating marketing image: {str(e)}")
@@ -1489,7 +1515,7 @@ class MarketingBot:
             
             # Generate marketing image
             log_and_print("INFO", f"Starting image generation for user {user_id}")
-            output_path = self.image_generator.generate_marketing_image(
+            output_path, image_info = self.image_generator.generate_marketing_image(
                 product_image_path,
                 product_details,
                 product_type
@@ -1497,26 +1523,39 @@ class MarketingBot:
             
             if output_path and os.path.exists(output_path):
                 log_and_print("INFO", f"Image generated successfully for user {user_id}: {output_path}")
-                # Get the Railway app URL for serving images
-                app_url = os.getenv('RAILWAY_STATIC_URL', os.getenv('APP_URL', 'https://auto-design-production.up.railway.app'))
-                image_url = f"{app_url}/images/output/{os.path.basename(output_path)}"
-                log_and_print("INFO", f"Image URL: {image_url}")
+                # Get URLs from image_info
+                local_url = image_info.get('local_url')
+                public_url = image_info.get('public_url')
+                
+                # Choose the best URL to share - prefer public URL if available
+                share_url = public_url if public_url else local_url
                 
                 # If share_link_only is True, just send the link instead of the image
                 if share_link_only:
                     log_and_print("INFO", f"Sharing image URL instead of image for user {user_id}")
+                    
+                    # Create a message with both public and local URLs if available
+                    url_message = f"🎉 Your marketing image is ready!\n\n"
+                    
+                    if public_url:
+                        url_message += f"📱 Public URL (accessible from any device):\n{public_url}\n\n"
+                    
+                    if local_url:
+                        url_message += f"🔗 Local URL (accessible while our server is running):\n{local_url}\n\n"
+                    
+                    url_message += f"These links will be available for the next 24 hours.\n\n"
+                    url_message += f"To create another image, send 'edit' again."
+                    
                     self.whatsapp_client.send_message(
                         from_number,
-                        f"🎉 Your marketing image is ready!\n\n"
-                        f"View and download your image here:\n{image_url}\n\n"
-                        f"This link will be available for the next 24 hours.\n\n"
-                        f"To create another image, send 'edit' again."
+                        url_message
                     )
                 
                 return {
                     "success": True,
                     "image_path": output_path,
-                    "image_url": image_url
+                    "image_url": share_url,
+                    "image_info": image_info
                 }
             else:
                 log_and_print("ERROR", f"Failed to generate marketing image for user {user_id}")
@@ -1722,66 +1761,86 @@ class MarketingBot:
                 
                 if result['success']:
                     log_and_print("INFO", f"Image generated successfully for user {user_id}: {result['image_path']}")
-                    # Get local file path
-                    image_path = result['image_path']
                     
-                    # Verify the file exists
-                    if not os.path.exists(image_path):
-                        log_and_print("ERROR", f"Generated image file not found: {image_path}")
-                        self.whatsapp_client.send_message(
-                            from_number,
-                            "Sorry, there was an error saving the generated image. Please try again by sending 'edit'."
+                    # If in link mode, no need to send image directly - already sent by process_request
+                    if share_link_only:
+                        log_and_print("INFO", f"Using link-only mode, skipping direct image sending")
+                    else:
+                        # Get local file path
+                        image_path = result['image_path']
+                        
+                        # Verify the file exists
+                        if not os.path.exists(image_path):
+                            log_and_print("ERROR", f"Generated image file not found: {image_path}")
+                            self.whatsapp_client.send_message(
+                                from_number,
+                                "Sorry, there was an error saving the generated image. Please try again by sending 'edit'."
+                            )
+                            return
+                        
+                        # Read the image for base64 encoding
+                        log_and_print("INFO", f"Reading image file for base64 encoding: {image_path}")
+                        print(f"[DEBUG] File size: {os.path.getsize(image_path)} bytes")
+                        
+                        try:
+                            # Read image bytes directly without any manipulation
+                            with open(image_path, 'rb') as img_file:
+                                img_data = img_file.read()
+                                print(f"[DEBUG] Image data read: {len(img_data)} bytes")
+                                img_base64 = base64.b64encode(img_data).decode('utf-8')
+                                print(f"[DEBUG] Base64 encoding length: {len(img_base64)} characters")
+                        except Exception as read_error:
+                            log_and_print("ERROR", f"Failed to read image file: {str(read_error)}")
+                            traceback.print_exc()
+                            self.whatsapp_client.send_message(
+                                from_number,
+                                "Sorry, I had trouble processing the generated image. Please try again by sending 'edit'."
+                            )
+                            return
+                        
+                        # Send the generated image without modifications
+                        log_and_print("INFO", f"Sending original unmodified image to user {user_id}")
+                        
+                        # First check image dimensions
+                        try:
+                            with Image.open(image_path) as img_check:
+                                width, height = img_check.size
+                                aspect_ratio = width / height
+                                log_and_print("INFO", f"Sending image dimensions: {width}x{height}, aspect ratio: {aspect_ratio:.2f}")
+                                
+                                # If image might be problematic for WhatsApp, log a warning
+                                if width > 2000 or height > 2000:
+                                    log_and_print("WARNING", f"Image dimensions ({width}x{height}) might exceed WhatsApp maximum size")
+                                if aspect_ratio > 2.5 or aspect_ratio < 0.4:
+                                    log_and_print("WARNING", f"Image aspect ratio ({aspect_ratio:.2f}) is extreme and might be cropped by WhatsApp")
+                        except Exception as img_check_err:
+                            log_and_print("WARNING", f"Could not check image dimensions: {str(img_check_err)}")
+                        
+                        # Send image with clear MIME type
+                        media_result = self.whatsapp_client.send_media(
+                            to_number=from_number,
+                            caption="🎉 Here's your marketing image!\n\n"
+                            "To create another image, send 'edit' again.",
+                            media_base64=img_base64,
+                            filename=os.path.basename(image_path)
                         )
-                        return
+                        
+                        # After sending the direct image, also send links if available
+                        image_info = result.get('image_info', {})
+                        public_url = image_info.get('public_url')
+                        
+                        # If we have a public URL, share it for the user's convenience
+                        if public_url:
+                            self.whatsapp_client.send_message(
+                                from_number,
+                                f"📱 You can also access your image at this public link:\n{public_url}\n\n"
+                                f"This link can be shared with anyone and will work on any device."
+                            )
+                        
+                        # Set media_result for success check below
+                        media_result = {"success": True}
                     
-                    # Read the image for base64 encoding
-                    log_and_print("INFO", f"Reading image file for base64 encoding: {image_path}")
-                    print(f"[DEBUG] File size: {os.path.getsize(image_path)} bytes")
-                    
-                    try:
-                        # Read image bytes directly without any manipulation
-                        with open(image_path, 'rb') as img_file:
-                            img_data = img_file.read()
-                            print(f"[DEBUG] Image data read: {len(img_data)} bytes")
-                            img_base64 = base64.b64encode(img_data).decode('utf-8')
-                            print(f"[DEBUG] Base64 encoding length: {len(img_base64)} characters")
-                    except Exception as read_error:
-                        log_and_print("ERROR", f"Failed to read image file: {str(read_error)}")
-                        traceback.print_exc()
-                        self.whatsapp_client.send_message(
-                            from_number,
-                            "Sorry, I had trouble processing the generated image. Please try again by sending 'edit'."
-                        )
-                        return
-                    
-                    # Send the generated image without modifications
-                    log_and_print("INFO", f"Sending original unmodified image to user {user_id}")
-                    
-                    # First check image dimensions
-                    try:
-                        with Image.open(image_path) as img_check:
-                            width, height = img_check.size
-                            aspect_ratio = width / height
-                            log_and_print("INFO", f"Sending image dimensions: {width}x{height}, aspect ratio: {aspect_ratio:.2f}")
-                            
-                            # If image might be problematic for WhatsApp, log a warning
-                            if width > 2000 or height > 2000:
-                                log_and_print("WARNING", f"Image dimensions ({width}x{height}) might exceed WhatsApp maximum size")
-                            if aspect_ratio > 2.5 or aspect_ratio < 0.4:
-                                log_and_print("WARNING", f"Image aspect ratio ({aspect_ratio:.2f}) is extreme and might be cropped by WhatsApp")
-                    except Exception as img_check_err:
-                        log_and_print("WARNING", f"Could not check image dimensions: {str(img_check_err)}")
-                    
-                    # Send image with clear MIME type
-                    media_result = self.whatsapp_client.send_media(
-                        to_number=from_number,
-                        caption="🎉 Here's your marketing image!\n\n"
-                        "To create another image, send 'edit' again.",
-                        media_base64=img_base64,
-                        filename=os.path.basename(image_path)
-                    )
-                    
-                    if media_result['success']:
+                    if media_result.get('success', False) or share_link_only:
                         log_and_print("INFO", f"Image sent successfully to user {user_id}")
                     else:
                         log_and_print("ERROR", f"Failed to send image to user {user_id}: {media_result.get('error')}")
@@ -2380,3 +2439,55 @@ if __name__ == '__main__':
     
     # Run the Flask app
     app.run(host='0.0.0.0', port=port, debug=False)  # Set debug=False for production
+
+def upload_image_to_imgur(image_bytes: bytes) -> Optional[str]:
+    """Upload an image to Imgur and return the shareable link
+    
+    Args:
+        image_bytes: The image data as bytes
+        
+    Returns:
+        Optional[str]: The URL to the uploaded image, or None if upload failed
+    """
+    if not IMGUR_CLIENT_ID:
+        log_and_print("WARNING", "Imgur upload requested but IMGUR_CLIENT_ID not configured")
+        return None
+    
+    try:
+        log_and_print("INFO", "Uploading image to Imgur...")
+        headers = {
+            'Authorization': f'Client-ID {IMGUR_CLIENT_ID}'
+        }
+        
+        # Convert image bytes to base64
+        b64_image = base64.b64encode(image_bytes).decode('utf-8')
+        
+        data = {
+            'image': b64_image,
+            'type': 'base64',
+            'title': f'Marketing Image {datetime.now().strftime("%Y-%m-%d")}',
+            'description': 'Generated by Marketing Bot'
+        }
+        
+        response = requests.post(
+            'https://api.imgur.com/3/image',
+            headers=headers,
+            data=data,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get('success'):
+                imgur_url = result.get('data', {}).get('link')
+                log_and_print("INFO", f"Image uploaded to Imgur: {imgur_url}")
+                return imgur_url
+        
+        log_and_print("ERROR", f"Failed to upload to Imgur: HTTP {response.status_code}")
+        if hasattr(response, 'text'):
+            log_and_print("ERROR", f"Imgur response: {response.text[:200]}...")
+        return None
+    
+    except Exception as e:
+        log_and_print("ERROR", f"Error uploading to Imgur: {str(e)}")
+        return None
