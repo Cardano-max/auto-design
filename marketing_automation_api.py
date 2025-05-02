@@ -4,7 +4,6 @@ Marketing Image Generator - Maytapi WhatsApp Version
 --------------------------------------------
 Production version with Maytapi WhatsApp API integration
 Configured for Railway.com deployment
-Updated May 2025
 """
 
 import os
@@ -15,7 +14,6 @@ import time
 import traceback
 import hashlib
 import math
-import re
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Union, Tuple
 from PIL import Image
@@ -23,7 +21,7 @@ from io import BytesIO
 from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 import requests
-import urllib.parse
+from PIL import ImageDraw
 
 # Load environment variables
 load_dotenv()
@@ -200,18 +198,19 @@ class ImageGenerator:
         self.api_key = api_key
         self.client = openai_client
         logger.info(f"ImageGenerator initialized with OpenAI API")
-        self.logger = logger
     
     def generate_marketing_image(self, product_image_path: str, product_details: Dict, product_type: str = "beverage", logo_image_path: str = None) -> Optional[str]:
         """
         Generate a marketing image using OpenAI API with gpt-image-1 model.
         If logo_image_path is provided, it will be used as a reference image.
-        If no logo is provided, it will use mask-based editing.
         Returns the output image path or None on failure.
         """
         try:
             start_time = time.time()
             product_name = product_details.get('product_name', 'product')
+            
+            # Use global logger instead of self.logger
+            log_and_print("INFO", f"Generating marketing image for {product_name}")
             
             # 1. Build the prompt
             if product_type.lower() == "beverage":
@@ -220,11 +219,16 @@ class ImageGenerator:
                 prompt = PromptTemplates.get_food_template(product_details)
             else:
                 prompt = PromptTemplates.get_master_template(product_details)
-            self.logger.info(f"Prompt for image generation: {prompt[:100]}...")
+                
+            # Enhance the prompt to be more specific about what to modify vs. preserve
+            preservation_instruction = "IMPORTANT: Preserve the original product exactly as shown in the image. Only add the requested design elements, text, and branding around it."
+            prompt = f"{prompt}\n\n{preservation_instruction}"
+            
+            log_and_print("INFO", f"Prompt for image generation: {prompt[:100]}...")
 
             # 2. Ensure images are PNG and not too large
             if not os.path.exists(product_image_path):
-                self.logger.error(f"Product image not found at path: {product_image_path}")
+                log_and_print("ERROR", f"Product image not found at path: {product_image_path}")
                 return None
 
             # Process product image
@@ -233,7 +237,7 @@ class ImageGenerator:
                     converted_path = f"{os.path.splitext(product_image_path)[0]}_converted.png"
                     img.save(converted_path, format="PNG")
                     product_image_path = converted_path
-                    self.logger.info(f"Product image converted to PNG: {product_image_path}")
+                    log_and_print("INFO", f"Product image converted to PNG: {product_image_path}")
 
                 file_size = os.path.getsize(product_image_path)
                 if file_size > 10 * 1024 * 1024:  # 10MB limit
@@ -244,7 +248,7 @@ class ImageGenerator:
                     resized_path = f"{os.path.splitext(product_image_path)[0]}_resized.png"
                     img.save(resized_path, format="PNG", optimize=True)
                     product_image_path = resized_path
-                    self.logger.info(f"Product image resized to {new_width}x{new_height}")
+                    log_and_print("INFO", f"Product image resized to {new_width}x{new_height}")
 
             # Process logo image if provided
             if logo_image_path and os.path.exists(logo_image_path):
@@ -253,7 +257,7 @@ class ImageGenerator:
                         converted_path = f"{os.path.splitext(logo_image_path)[0]}_converted.png"
                         logo_img.save(converted_path, format="PNG")
                         logo_image_path = converted_path
-                        self.logger.info(f"Logo image converted to PNG: {logo_image_path}")
+                        log_and_print("INFO", f"Logo image converted to PNG: {logo_image_path}")
 
                     file_size = os.path.getsize(logo_image_path)
                     if file_size > 10 * 1024 * 1024:  # 10MB limit
@@ -264,79 +268,54 @@ class ImageGenerator:
                         resized_path = f"{os.path.splitext(logo_image_path)[0]}_resized.png"
                         logo_img.save(resized_path, format="PNG", optimize=True)
                         logo_image_path = resized_path
-                        self.logger.info(f"Logo image resized to {new_width}x{new_height}")
+                        log_and_print("INFO", f"Logo image resized to {new_width}x{new_height}")
 
             # 3. Prepare API call
-            self.logger.info("Sending image edit request to OpenAI API (gpt-image-1)")
+            log_and_print("INFO", "Sending image edit request to OpenAI API (gpt-image-1)")
             max_retries = 3
             retry_delay = 2
             result = None
+            
+            # Use lower quality for testing to save credits (standard or hd)
+            quality = "low"  # Use "hd" for higher quality
 
             for retry in range(max_retries):
                 try:
                     with open(product_image_path, "rb") as product_file:
-                        # Use OpenAI's gpt-image-1 model for image editing
                         if logo_image_path:
-                            # Use multiple image inputs for logo-based editing
+                            # Use multiple image inputs for logo-based editing (simpler approach)
+                            log_and_print("INFO", f"Using logo image for reference: {logo_image_path}")
                             with open(logo_image_path, "rb") as logo_file:
                                 result = self.client.images.edit(
                                     model="gpt-image-1",
                                     prompt=prompt,
                                     image=[product_file, logo_file],
                                     size="1024x1024",
-                                    quality="standard",
+                                    quality=quality,
                                     n=1
                                 )
                         else:
-                            # First create a simple mask
-                            product_file.seek(0)
-                            mask_img = self._create_basic_mask(product_image_path)
-                            
-                            if mask_img:
-                                # Save mask temporarily
-                                mask_path = f"{os.path.splitext(product_image_path)[0]}_mask.png"
-                                mask_img.save(mask_path)
-                                
-                                # Second API call with mask
-                                with open(product_image_path, "rb") as product_file:
-                                    with open(mask_path, "rb") as mask_file:
-                                        result = self.client.images.edit(
-                                            model="gpt-image-1",
-                                            prompt=prompt,
-                                            image=product_file,
-                                            mask=mask_file,
-                                            size="1024x1024",
-                                            quality="standard",
-                                            n=1
-                                        )
-                                
-                                # Clean up mask file
-                                try:
-                                    os.remove(mask_path)
-                                except:
-                                    pass
-                            else:
-                                # Fallback to direct edit if mask creation fails
-                                product_file.seek(0)
-                                result = self.client.images.edit(
-                                    model="gpt-image-1",
-                                    prompt=prompt,
-                                    image=product_file,
-                                    size="1024x1024",
-                                    quality="standard",
-                                    n=1
-                                )
+                            # Direct edit without mask - simpler approach
+                            log_and_print("INFO", "Using direct edit without mask")
+                            result = self.client.images.edit(
+                                model="gpt-image-1",
+                                prompt=prompt,
+                                image=product_file,
+                                size="1024x1024",
+                                quality=quality,
+                                n=1
+                            )
                     
-                    self.logger.info("API call successful")
+                    log_and_print("INFO", "API call successful")
                     break
                 except Exception as retry_error:
-                    self.logger.warning(f"API call attempt {retry+1} failed: {str(retry_error)}")
+                    log_and_print("WARNING", f"API call attempt {retry+1} failed: {str(retry_error)}")
                     if retry < max_retries - 1:
-                        self.logger.info(f"Retrying in {retry_delay} seconds...")
+                        log_and_print("INFO", f"Retrying in {retry_delay} seconds...")
                         time.sleep(retry_delay)
                         retry_delay *= 2
                     else:
-                        self.logger.error("All API call retries failed")
+                        log_and_print("ERROR", "All API call retries failed")
                         return None
 
             # 4. Process the result
@@ -344,7 +323,7 @@ class ImageGenerator:
                 b64_data = result.data[0].b64_json
                 image_bytes = base64.b64decode(b64_data)
             else:
-                self.logger.error("No image data in response")
+                log_and_print("ERROR", "No image data in response")
                 return None
                 
             # 5. Save the image
@@ -355,50 +334,15 @@ class ImageGenerator:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             with open(output_path, 'wb') as f:
                 f.write(image_bytes)
-            self.logger.info(f"Marketing image saved to {output_path}")
+            log_and_print("INFO", f"Marketing image saved to {output_path}")
 
             processing_time = time.time() - start_time
-            self.logger.info(f"Total processing time: {processing_time:.2f} seconds")
+            log_and_print("INFO", f"Total processing time: {processing_time:.2f} seconds")
             return output_path
                 
         except Exception as e:
-            self.logger.error(f"Error generating marketing image: {str(e)}")
-            traceback.print_exc()
-            return None
-            
-    def _create_basic_mask(self, image_path: str) -> Optional[Image.Image]:
-        """Create a simple mask for the image focusing on the central subject"""
-        try:
-            # Open the original image
-            with Image.open(image_path) as img:
-                # Create a white background mask
-                mask = Image.new('L', img.size, 0)  # 0 = black background
-                
-                # Calculate a central oval/rectangle where the subject likely is
-                width, height = img.size
-                
-                # Create mask drawing object
-                from PIL import ImageDraw
-                draw = ImageDraw.Draw(mask)
-                
-                # Draw a filled ellipse in the center (white)
-                center_width = width // 2
-                center_height = height // 2
-                x1 = center_width - (width // 3)
-                y1 = center_height - (height // 3)
-                x2 = center_width + (width // 3)
-                y2 = center_height + (height // 3)
-                
-                draw.ellipse([x1, y1, x2, y2], fill=255)  # 255 = white foreground
-                
-                # Convert mask to RGBA for alpha channel
-                mask_rgba = Image.new('RGBA', img.size)
-                mask_rgba.putalpha(mask)
-                
-                return mask_rgba
-                
-        except Exception as e:
-            self.logger.error(f"Error creating basic mask: {str(e)}")
+            log_and_print("ERROR", f"Error generating marketing image: {str(e)}")
+            log_and_print("ERROR", f"Traceback: {traceback.format_exc()}")
             return None
 
 ###################
@@ -514,7 +458,7 @@ class MaytapiClient:
     
     def get_media_content(self, message_id: str) -> Optional[bytes]:
         """
-        Fetches media content from Maytapi API with improved reliability.
+        Fetches media content from Maytapi API.
         
         Args:
             message_id: The ID of the message containing the media
@@ -525,7 +469,6 @@ class MaytapiClient:
         try:
             # First, get the message details to check if it's a media message
             message_endpoint = f"/{self.phone_id}/getMessage/{message_id}"
-            log_and_print("INFO", f"Fetching message details for ID: {message_id}")
             response = self._make_request("GET", message_endpoint)
             
             if not response.get('success'):
@@ -536,8 +479,6 @@ class MaytapiClient:
             if not message_data:
                 log_and_print("ERROR", "No message data found")
                 return None
-            
-            log_and_print("DEBUG", f"Message data: {json.dumps(message_data)}")
                 
             # Get the first message
             message = message_data[0].get('message', {})
@@ -546,87 +487,60 @@ class MaytapiClient:
             if message_type not in ['image', 'document', 'video', 'audio']:
                 log_and_print("ERROR", f"Message is not a media type: {message_type}")
                 return None
-            
-            # Look for direct media URLs in the message
+                
+            # Check for media URL in different possible locations
             media_url = None
-            direct_url_fields = ['media', 'url', 'thumbnail', 'file']
             
-            for field in direct_url_fields:
-                if field in message and message[field] and isinstance(message[field], str):
-                    media_url = message[field]
-                    log_and_print("INFO", f"Found media URL in message.{field}: {media_url[:50]}...")
-                    break
+            # Try direct media field first
+            if 'media' in message:
+                media_url = message['media']
+                log_and_print("INFO", f"Found media URL in message.media: {media_url[:50]}...")
+            
+            # Try message.url field (which seems to be used in some cases)
+            elif 'url' in message:
+                media_url = message['url']
+                log_and_print("INFO", f"Found media URL in message.url: {media_url[:50]}...")
             
             # Try body field for base64 data
-            if not media_url and 'body' in message and isinstance(message['body'], str):
-                body = message['body']
-                if body.startswith('data:'):
-                    try:
-                        # Extract base64 data from data URL
-                        content_type, b64data = body.split(',', 1)
-                        log_and_print("INFO", f"Extracting base64 data from body")
-                        decoded_data = base64.b64decode(b64data)
-                        if len(decoded_data) > 100:
-                            return decoded_data
-                    except Exception as e:
-                        log_and_print("ERROR", f"Failed to decode base64 data: {str(e)}")
-            
-            # Special handling for Maytapi's newer media API (March 2025+)
-            if not media_url and 'id' in message:
+            elif 'body' in message and isinstance(message['body'], str) and message['body'].startswith('data:'):
                 try:
-                    media_endpoint = f"/{self.phone_id}/getMedia/{message['id']}"
-                    log_and_print("INFO", f"Trying newer media endpoint: {media_endpoint}")
-                    media_response = self._make_request("GET", media_endpoint)
-                    
-                    if media_response.get('success') and 'data' in media_response:
-                        media_data = media_response.get('data', {})
-                        if 'url' in media_data:
-                            media_url = media_data['url']
-                            log_and_print("INFO", f"Found media URL via getMedia: {media_url[:50]}...")
+                    # Extract base64 data from data URL
+                    base64_data = message['body'].split(',')[1]
+                    return base64.b64decode(base64_data)
                 except Exception as e:
-                    log_and_print("ERROR", f"Failed to get media via newer endpoint: {str(e)}")
-            
-            # If we found a URL, download the media
-            if media_url:
-                try:
-                    # Some Maytapi URLs need the API token in the header
-                    headers = {}
-                    if "maytapi.com" in media_url:
-                        headers = {'x-maytapi-key': self.api_token}
-                    
-                    # If URL is relative, make it absolute
-                    if media_url.startswith('/'):
-                        media_url = f"https://api.maytapi.com{media_url}"
-                    
-                    log_and_print("INFO", f"Downloading media from URL: {media_url[:50]}...")
-                    response = requests.get(media_url, headers=headers, timeout=30)
-                    
-                    if response.status_code == 200:
-                        # Verify it's actually image data
-                        try:
-                            log_and_print("INFO", f"Media downloaded, size: {len(response.content)} bytes")
-                            if len(response.content) > 100:
-                                return response.content
-                            else:
-                                log_and_print("ERROR", f"Downloaded data too small: {len(response.content)} bytes")
-                                return None
-                        except Exception as img_err:
-                            log_and_print("ERROR", f"Error validating media data: {str(img_err)}")
-                            # Return anyway, since it might be a non-image media
-                            if len(response.content) > 100:
-                                return response.content
-                            return None
-                    else:
-                        log_and_print("ERROR", f"Failed to fetch media: HTTP {response.status_code}")
-                        return None
-                        
-                except requests.exceptions.RequestException as e:
-                    log_and_print("ERROR", f"Error fetching media: {str(e)}")
+                    log_and_print("ERROR", f"Failed to decode base64 data: {str(e)}")
                     return None
             
-            # If we get here, we couldn't find any media content
-            log_and_print("ERROR", "No media URL found or failed to download media")
-            return None
+            if not media_url:
+                log_and_print("ERROR", "No media URL found in message")
+                return None
+                
+            # Fetch the media content
+            try:
+                response = requests.get(
+                    media_url,
+                    headers={
+                        'x-maytapi-key': self.api_token,
+                        'Content-Type': 'application/json'
+                    },
+                    timeout=30
+                )
+                
+                if response.status_code == 200:
+                    # Verify it's actually image data
+                    try:
+                        Image.open(BytesIO(response.content))
+                        return response.content
+                    except Exception as img_err:
+                        log_and_print("ERROR", f"Downloaded data is not a valid image: {str(img_err)}")
+                        return None
+                else:
+                    log_and_print("ERROR", f"Failed to fetch media: HTTP {response.status_code}")
+                    return None
+                    
+            except requests.exceptions.RequestException as e:
+                log_and_print("ERROR", f"Error fetching media: {str(e)}")
+                return None
                 
         except Exception as e:
             log_and_print("ERROR", f"Error in get_media_content: {str(e)}")
@@ -739,69 +653,27 @@ class MaytapiClient:
                 # Update rate limiting timestamp for this specific user
                 last_message_time[to_number] = time.time()
                 log_and_print("INFO", f"Media sent successfully to {to_number}")
-                return {"success": True, "data": result.get("data", {})}
-            else:
+            return {"success": True, "data": result.get("data", {})}
+        else:
                 error_msg = result.get("error", "Unknown error")
                 log_and_print("ERROR", f"Error sending media (attempt {retry+1}): {error_msg}")
                 
                 # Check for specific error types
                 if "too large" in error_msg.lower() or "file size" in error_msg.lower():
                     log_and_print("ERROR", "Media file too large")
-                    
-                    # Try to reduce the image size and retry
-                    if media_base64 and retry == 0:
-                        try:
-                            log_and_print("INFO", "Attempting to reduce image size")
-                            smaller_base64 = self._reduce_image_size(media_base64)
-                            if smaller_base64:
-                                media_base64 = smaller_base64
-                                data["message"] = f"data:image/png;base64,{media_base64}"
-                                log_and_print("INFO", f"Reduced base64 length: {len(media_base64)} chars")
-                        except Exception as e:
-                            log_and_print("ERROR", f"Failed to reduce image size: {str(e)}")
-                    
-                    # If it's the last retry, return failure
-                    if retry == max_retries - 1:
-                        return {"success": False, "error": "Media file too large"}
+                    return {"success": False, "error": "Media file too large"}
                 
                 # If not the last retry, wait and try again
                 if retry < max_retries - 1:
                     log_and_print("INFO", f"Retrying media send in {retry_delay} seconds...")
                     time.sleep(retry_delay)
                     retry_delay *= 2
+                else:
+                    log_and_print("ERROR", "All media send retries failed")
+                    return {"success": False, "error": error_msg}
         
         # If we get here, all retries failed
         return {"success": False, "error": "Failed to send media after multiple attempts"}
-    
-    def _reduce_image_size(self, base64_data: str) -> Optional[str]:
-        """Reduce the size of a base64-encoded image"""
-        try:
-            # Decode base64 to bytes
-            image_bytes = base64.b64decode(base64_data)
-            
-            # Load image using PIL
-            with Image.open(BytesIO(image_bytes)) as img:
-                # Get original dimensions
-                width, height = img.size
-                
-                # Calculate new dimensions (reduce by 50%)
-                new_width = width // 2
-                new_height = height // 2
-                
-                # Resize image
-                img = img.resize((new_width, new_height), Image.LANCZOS)
-                
-                # Save to BytesIO with reduced quality
-                output = BytesIO()
-                img.save(output, format="JPEG", quality=70, optimize=True)
-                
-                # Convert back to base64
-                output.seek(0)
-                return base64.b64encode(output.read()).decode('utf-8')
-                
-        except Exception as e:
-            log_and_print("ERROR", f"Error reducing image size: {str(e)}")
-            return None
     
     def _clean_phone_number(self, phone_number: str) -> str:
         """Clean a phone number to contain only digits with country code
@@ -1186,7 +1058,7 @@ class ImageHandler:
             user_id = hashlib.md5(from_number.encode()).hexdigest()[:8]  # Short ID for logging
             log_and_print("INFO", f"Attempting to extract image from webhook data for user {user_id}")
             
-            # STRATEGY 1: Direct message ID fetch using improved method
+            # STRATEGY 1: Direct message ID fetch
             message_data = webhook_data.get('message', {})
             message_id = message_data.get('id')
             
@@ -1200,36 +1072,80 @@ class ImageHandler:
                     log_and_print("WARNING", "Direct message ID fetch failed or returned invalid data, trying alternative methods")
             
             # STRATEGY 2: Check for direct media URL in the message object
-            log_and_print("INFO", "Checking for media URL in message data")
-            
             if isinstance(message_data, dict):
-                # Try standard media fields
-                for field in ['media', 'url', 'thumbnail', 'file']:
+                log_and_print("INFO", "Checking for media URL in message data")
+                
+                # Try standard media field
+                if 'media' in message_data and message_data['media']:
+                    media_url = message_data['media']
+                    log_and_print("INFO", f"Found media URL in message: {media_url[:50]}...")
+                    try:
+                        response = requests.get(media_url, timeout=30)
+                        if response.status_code == 200 and len(response.content) > 100:
+                            log_and_print("INFO", f"Successfully downloaded image from media URL: {len(response.content)} bytes")
+                            return response.content
+                    except Exception as url_error:
+                        log_and_print("ERROR", f"Failed to download from media URL: {str(url_error)}")
+                
+                # Try different possible fields where media might be stored
+                for field in ['file', 'thumbnail', 'mediaUrl']:
                     if field in message_data and message_data[field]:
                         media_url = message_data[field]
-                        if isinstance(media_url, str) and (media_url.startswith('http') or media_url.startswith('https')):
-                            log_and_print("INFO", f"Found media URL in message.{field}: {media_url[:50]}...")
+                        if isinstance(media_url, str) and (media_url.startswith('http') or media_url.startswith('data:')):
+                            log_and_print("INFO", f"Found alternative media URL in '{field}': {media_url[:50]}...")
                             
-                            try:
-                                headers = {}
-                                if "maytapi.com" in media_url:
-                                    headers = {'x-maytapi-key': self.maytapi_client.api_token}
-                                
-                                response = requests.get(media_url, headers=headers, timeout=30)
-                                if response.status_code == 200 and len(response.content) > 100:
-                                    # Try to verify it's a valid image
-                                    try:
-                                        Image.open(BytesIO(response.content))
-                                        log_and_print("INFO", f"Successfully downloaded verified image from {field} URL: {len(response.content)} bytes")
+                            # Handle data URI format
+                            if media_url.startswith('data:'):
+                                try:
+                                    content_type, b64data = media_url.split(',', 1)
+                                    log_and_print("INFO", f"Extracting base64 data from data URI")
+                                    decoded_data = base64.b64decode(b64data)
+                                    if len(decoded_data) > 100:
+                                        return decoded_data
+                                    else:
+                                        log_and_print("ERROR", f"Decoded data too small: {len(decoded_data)} bytes")
+                                except Exception as b64_error:
+                                    log_and_print("ERROR", f"Failed to decode data URI: {str(b64_error)}")
+                            
+                            # Handle HTTP URL format
+                            elif media_url.startswith('http'):
+                                try:
+                                    response = requests.get(media_url, timeout=30)
+                                    if response.status_code == 200 and len(response.content) > 100:
+                                        log_and_print("INFO", f"Successfully downloaded image from {field} URL: {len(response.content)} bytes")
                                         return response.content
-                                    except:
-                                        # Even if it's not a valid image, return it - it might be another media type
-                                        log_and_print("INFO", f"Successfully downloaded media from {field} URL: {len(response.content)} bytes")
-                                        return response.content
-                            except Exception as url_error:
-                                log_and_print("ERROR", f"Failed to download from {field} URL: {str(url_error)}")
+                                except Exception as url_error:
+                                    log_and_print("ERROR", f"Failed to download from {field} URL: {str(url_error)}")
             
-            # STRATEGY 3: Deep search in all webhook data
+            # STRATEGY 3: Look for body field with base64 data
+            if isinstance(message_data, dict) and 'body' in message_data and message_data['body']:
+                try:
+                    log_and_print("INFO", "Trying to decode base64 data from body field")
+                    body_data = message_data['body']
+                    if isinstance(body_data, str):
+                        # If it's base64 encoded
+                        if body_data.startswith('data:'):
+                            content_type, b64data = body_data.split(',', 1)
+                            decoded_data = base64.b64decode(b64data)
+                            if len(decoded_data) > 100:
+                                return decoded_data
+                        else:
+                            # Sometimes it's just base64 without the prefix
+                            try:
+                                decoded_data = base64.b64decode(body_data)
+                                if len(decoded_data) > 100:
+                                    # Verify it's an image by trying to open it
+                                    try:
+                                        Image.open(BytesIO(decoded_data))
+                                        return decoded_data
+                                    except:
+                                        pass
+                            except:
+                                pass
+                except Exception as body_error:
+                    log_and_print("ERROR", f"Failed to extract image from body: {str(body_error)}")
+            
+            # STRATEGY 4: Deep search in all webhook data
             log_and_print("INFO", "Deep searching webhook data for image data")
             
             def search_dict_for_image(data, path=""):
@@ -1244,11 +1160,7 @@ class ImageHandler:
                         if value.startswith('http'):
                             log_and_print("INFO", f"Found potential media URL in {current_path}: {value[:50]}...")
                             try:
-                                headers = {}
-                                if "maytapi.com" in value:
-                                    headers = {'x-maytapi-key': self.maytapi_client.api_token}
-                                    
-                                response = requests.get(value, headers=headers, timeout=30)
+                                response = requests.get(value, timeout=30)
                                 if response.status_code == 200 and len(response.content) > 100:
                                     # Try to open as image to verify
                                     try:
@@ -1256,9 +1168,7 @@ class ImageHandler:
                                         log_and_print("INFO", f"Successfully downloaded verified image from {current_path}: {len(response.content)} bytes")
                                         return response.content
                                     except:
-                                        # It might be another media type
-                                        log_and_print("INFO", f"Successfully downloaded media from {current_path}: {len(response.content)} bytes")
-                                        return response.content
+                                        log_and_print("WARNING", f"Downloaded content from {current_path} is not a valid image")
                             except Exception as search_error:
                                 log_and_print("ERROR", f"Failed to download from {current_path}: {str(search_error)}")
                         
@@ -1274,9 +1184,7 @@ class ImageHandler:
                                         log_and_print("INFO", f"Successfully decoded verified image from {current_path}: {len(image_data)} bytes")
                                         return image_data
                                     except:
-                                        # It might be another media type
-                                        log_and_print("INFO", f"Successfully decoded data from {current_path}: {len(image_data)} bytes")
-                                        return image_data
+                                        log_and_print("WARNING", f"Decoded content from {current_path} is not a valid image")
                             except Exception as data_error:
                                 log_and_print("ERROR", f"Failed to decode from {current_path}: {str(data_error)}")
                     
@@ -1301,37 +1209,7 @@ class ImageHandler:
             if image_data:
                 return image_data
             
-            # STRATEGY 4: Try to extract URL directly from message body
-            if isinstance(message_data, dict) and 'text' in message_data:
-                text = message_data['text']
-                if isinstance(text, str):
-                    # Try to find URLs in the text
-                    url_pattern = re.compile(r'https?://\S+')
-                    urls = url_pattern.findall(text)
-                    
-                    # Look for image URLs
-                    for url in urls:
-                        log_and_print("INFO", f"Found potential URL in message text: {url[:50]}...")
-                        
-                        # Clean the URL
-                        url = url.rstrip('.,;:!?\'\"')
-                        
-                        try:
-                            response = requests.get(url, timeout=30)
-                            if response.status_code == 200 and len(response.content) > 100:
-                                # Try to verify it's an image
-                                try:
-                                    Image.open(BytesIO(response.content))
-                                    log_and_print("INFO", f"Successfully downloaded verified image from text URL: {len(response.content)} bytes")
-                                    return response.content
-                                except:
-                                    # Continue to next URL
-                                    pass
-                        except:
-                            # Continue to next URL
-                            pass
-            
-            # No image data found after all strategies
+            # No image data found
             log_and_print("ERROR", f"Failed to extract image data for user {user_id} using all available methods")
             return None
             
@@ -2077,7 +1955,7 @@ def home():
     return jsonify({
         "service": "Marketing Image Generator (WhatsApp Version)",
         "status": "running",
-        "version": "2.1",
+        "version": "2.0",
         "endpoint": "/webhook"
     })
 
@@ -2126,8 +2004,8 @@ def webhook():
         message_data = webhook_data.get('message', {})
         
         # Extract sender info
-        from_number = user_data.get('id', '')  # Format: 1234567890@c.us
-        phone_number = user_data.get('phone', '')  # Format: 1234567890
+        from_number = user_data.get('id', '')  # Format: 905301234567@c.us
+        phone_number = user_data.get('phone', '')  # Format: 905301234567
         
         # Use phone number if id is not available
         if not from_number and phone_number:
