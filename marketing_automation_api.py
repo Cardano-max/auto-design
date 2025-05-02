@@ -1469,10 +1469,10 @@ class MarketingBot:
             from_number: User's WhatsApp number
             text: Message text
         """
-    try:
-        print(f"[DEBUG] Received text: '{text}' from {from_number}")
-        log_and_print("INFO", f"Processing text message: '{text}' from {from_number}")
-        
+        try:
+            print(f"[DEBUG] Received text: '{text}' from {from_number}")
+            log_and_print("INFO", f"Processing text message: '{text}' from {from_number}")
+            
             # Only process private chats (not groups) and only if from_number is valid
             if not from_number or "@g.us" in from_number:
                 log_and_print("INFO", f"Message from group or invalid number: {from_number}. Ignored.")
@@ -1502,7 +1502,7 @@ class MarketingBot:
                 return
             
             # Check for edit command - this starts a new session
-        if text.lower() == 'edit':
+            if text.lower() == 'edit':
                 log_and_print("INFO", f"User {user_id} sent 'edit' command")
                 
                 # Update session to waiting for image
@@ -1514,25 +1514,25 @@ class MarketingBot:
                 
                 # Send welcome message
                 self.whatsapp_client.send_message(
-                from_number,
-                "Welcome to Marketing Image Editor! 📸\n\n"
-                "Please send your product image to begin.\n\n"
+                    from_number,
+                    "Welcome to Marketing Image Editor! 📸\n\n"
+                    "Please send your product image to begin.\n\n"
                     "After sending the image, I'll ask for details like company name, product name, price, etc.\n\n"
                     "You can type 'cancel' at any time to exit the process."
-            )
+                )
                 
                 log_and_print("INFO", f"Sent welcome message to user {user_id}")
-            return
-        
+                return
+            
             # Check for generate command - ONLY VALID in waiting_for_details state
-        if text.lower() == 'generate':
+            if text.lower() == 'generate':
                 log_and_print("INFO", f"User {user_id} sent 'generate' command")
-            
-            # Print current session state for debugging
-            print(f"[DEBUG] Current session state: {session['state']}")
-            print(f"[DEBUG] Product image path: {session.get('product_image')}")
-            print(f"[DEBUG] Details collected: {json.dumps(session.get('details', {}))}")
-            
+                
+                # Print current session state for debugging
+                print(f"[DEBUG] Current session state: {session['state']}")
+                print(f"[DEBUG] Product image path: {session.get('product_image')}")
+                print(f"[DEBUG] Details collected: {json.dumps(session.get('details', {}))}")
+                
                 # Validate user is in the right session state
                 if session['state'] != 'waiting_for_details':
                     log_and_print("WARNING", f"User {user_id} tried to generate in wrong state: {session['state']}")
@@ -1543,50 +1543,50 @@ class MarketingBot:
                     )
                     return
                 
-            # Validate we have all required info
-            if not session.get('product_image'):
+                # Validate we have all required info
+                if not session.get('product_image'):
                     log_and_print("WARNING", f"User {user_id} tried to generate without an image")
                     self.whatsapp_client.send_message(
-                    from_number,
-                    "Please send a product image first.\n"
+                        from_number,
+                        "Please send a product image first.\n"
                         "To start, send 'edit'.\n\n"
                         "Or type 'cancel' to exit the process."
-                )
-                return
-            
-            details = session.get('details', {})
-            if not all([details.get('company_name'), details.get('product_name'), details.get('price')]):
-                missing = []
-                if not details.get('company_name'):
-                    missing.append('company name')
-                if not details.get('product_name'):
-                    missing.append('product name')
-                if not details.get('price'):
-                    missing.append('price')
+                    )
+                    return
                 
+                details = session.get('details', {})
+                if not all([details.get('company_name'), details.get('product_name'), details.get('price')]):
+                    missing = []
+                    if not details.get('company_name'):
+                        missing.append('company name')
+                    if not details.get('product_name'):
+                        missing.append('product name')
+                    if not details.get('price'):
+                        missing.append('price')
+                    
                     log_and_print("WARNING", f"User {user_id} tried to generate with missing details: {missing}")
                     self.whatsapp_client.send_message(
-                    from_number,
-                    f"Missing required details: {', '.join(missing)}\n\n"
+                        from_number,
+                        f"Missing required details: {', '.join(missing)}\n\n"
                         "Please provide all required information.\n\n"
                         "Type 'cancel' if you want to exit the process."
-                )
-                return
-            
+                    )
+                    return
+                
                 # Process the request
                 log_and_print("INFO", f"Starting image generation process for user {user_id}")
                 result = self.process_request(
                     user_id,
-                from_number,
-                session['product_image'],
-                details
-            )
-            
-            if result['success']:
-                    log_and_print("INFO", f"Image generated successfully for user {user_id}: {result['image_path']}")
-                # Get local file path
-                image_path = result['image_path']
+                    from_number,
+                    session['product_image'],
+                    details
+                )
                 
+                if result['success']:
+                    log_and_print("INFO", f"Image generated successfully for user {user_id}: {result['image_path']}")
+                    # Get local file path
+                    image_path = result['image_path']
+                    
                     # Verify the file exists
                     if not os.path.exists(image_path):
                         log_and_print("ERROR", f"Generated image file not found: {image_path}")
@@ -1596,99 +1596,99 @@ class MarketingBot:
                         )
                         return
                     
-                # Read the image for base64 encoding
-                log_and_print("INFO", f"Reading image file for base64 encoding: {image_path}")
+                    # Read the image for base64 encoding
+                    log_and_print("INFO", f"Reading image file for base64 encoding: {image_path}")
                     print(f"[DEBUG] File size: {os.path.getsize(image_path)} bytes")
-                
-                try:
-                    with open(image_path, 'rb') as img_file:
-                        img_data = img_file.read()
-                        print(f"[DEBUG] Image data read: {len(img_data)} bytes")
-                        img_base64 = base64.b64encode(img_data).decode('utf-8')
-                        print(f"[DEBUG] Base64 encoding length: {len(img_base64)} characters")
-                except Exception as read_error:
+                    
+                    try:
+                        with open(image_path, 'rb') as img_file:
+                            img_data = img_file.read()
+                            print(f"[DEBUG] Image data read: {len(img_data)} bytes")
+                            img_base64 = base64.b64encode(img_data).decode('utf-8')
+                            print(f"[DEBUG] Base64 encoding length: {len(img_base64)} characters")
+                    except Exception as read_error:
                         log_and_print("ERROR", f"Failed to read image file: {str(read_error)}")
                         traceback.print_exc()
                         self.whatsapp_client.send_message(
-                        from_number,
+                            from_number,
                             "Sorry, I had trouble processing the generated image. Please try again by sending 'edit'."
-                    )
-                    return
-                
-                # Send the generated image
+                        )
+                        return
+                    
+                    # Send the generated image
                     log_and_print("INFO", f"Sending generated image to user {user_id}")
                     media_result = self.whatsapp_client.send_media(
                         to_number=from_number,
                         caption="🎉 Here's your marketing image!\n\n"
-                    "To create another image, send 'edit' again.",
-                    media_base64=img_base64,
-                    filename=os.path.basename(image_path)
-                )
-                
-                if media_result['success']:
-                        log_and_print("INFO", f"Image sent successfully to user {user_id}")
-                else:
-                        log_and_print("ERROR", f"Failed to send image to user {user_id}: {media_result.get('error')}")
-                    # Try to send an error message
-                        self.whatsapp_client.send_message(
-                        from_number,
-                        "I created your marketing image but couldn't send it. Please try again by sending 'edit'."
+                        "To create another image, send 'edit' again.",
+                        media_base64=img_base64,
+                        filename=os.path.basename(image_path)
                     )
-                
+                    
+                    if media_result['success']:
+                        log_and_print("INFO", f"Image sent successfully to user {user_id}")
+                    else:
+                        log_and_print("ERROR", f"Failed to send image to user {user_id}: {media_result.get('error')}")
+                        # Try to send an error message
+                        self.whatsapp_client.send_message(
+                            from_number,
+                            "I created your marketing image but couldn't send it. Please try again by sending 'edit'."
+                        )
+                    
                     # End session - IMPORTANT for proper user isolation
                     self.session_manager.end_session(from_number)
                     log_and_print("INFO", f"Session ended for user {user_id} after successful image generation")
-            else:
+                else:
                     log_and_print("ERROR", f"Failed to generate image for user {user_id}: {result.get('error')}")
                     self.whatsapp_client.send_message(
-                    from_number,
-                    f"Sorry, I couldn't generate the image: {result.get('error', 'Unknown error')}\n\n"
+                        from_number,
+                        f"Sorry, I couldn't generate the image: {result.get('error', 'Unknown error')}\n\n"
                         "Please try again by sending 'edit'."
-                )
-            return
-        
-        # Handle conversation flow based on state
-        if session['state'] == 'waiting_for_image':
+                    )
+                return
+            
+            # Handle conversation flow based on state
+            if session['state'] == 'waiting_for_image':
                 log_and_print("INFO", f"User {user_id} sent text while waiting for image")
                 self.whatsapp_client.send_message(
-                from_number,
-                "Please send your product image first.\n"
+                    from_number,
+                    "Please send your product image first.\n"
                     "I'm waiting for an image file.\n\n"
                     "Type 'cancel' if you want to exit the process."
-            )
-            return
-        
-        elif session['state'] == 'waiting_for_details':
+                )
+                return
+                
+            elif session['state'] == 'waiting_for_details':
                 log_and_print("INFO", f"User {user_id} sent details: {text}")
-            # Parse the details
-            lines = text.split('\n')
-            detail_provided = False
+                # Parse the details
+                lines = text.split('\n')
+                detail_provided = False
                 
                 # First, parse details if user sent a structured message
                 structured_details = {}
-            
-            # Check if this is a structured message
-            for line in lines:
-                if ':' in line:
-                    key, value = line.split(':', 1)
-                    key = key.strip().lower()
-                    value = value.strip()
-                    
-                    if 'company' in key:
+                
+                # Check if this is a structured message
+                for line in lines:
+                    if ':' in line:
+                        key, value = line.split(':', 1)
+                        key = key.strip().lower()
+                        value = value.strip()
+                        
+                        if 'company' in key:
                             structured_details['company_name'] = value
-                        detail_provided = True
-                    elif 'product' in key:
+                            detail_provided = True
+                        elif 'product' in key:
                             structured_details['product_name'] = value
-                        detail_provided = True
-                    elif 'price' in key:
+                            detail_provided = True
+                        elif 'price' in key:
                             structured_details['price'] = value
-                        detail_provided = True
-                    elif 'tagline' in key:
+                            detail_provided = True
+                        elif 'tagline' in key:
                             structured_details['tagline'] = value
-                        detail_provided = True
-                    elif 'address' in key or 'location' in key:
+                            detail_provided = True
+                        elif 'address' in key or 'location' in key:
                             structured_details['address'] = value
-                        detail_provided = True
+                            detail_provided = True
                 
                 # If structured details provided, update session
                 if detail_provided:
@@ -1707,65 +1707,61 @@ class MarketingBot:
                     if not current_details.get('company_name'):
                         current_details['company_name'] = text
                         log_and_print("INFO", f"Set company_name: {text}")
-                    detail_provided = True
+                        detail_provided = True
                     elif not current_details.get('product_name'):
                         current_details['product_name'] = text
                         log_and_print("INFO", f"Set product_name: {text}")
-                    detail_provided = True
+                        detail_provided = True
                     elif not current_details.get('price'):
                         current_details['price'] = text
                         log_and_print("INFO", f"Set price: {text}")
-                    detail_provided = True
+                        detail_provided = True
                     elif not current_details.get('tagline'):
                         current_details['tagline'] = text
                         log_and_print("INFO", f"Set tagline: {text}")
-                    detail_provided = True
+                        detail_provided = True
                     elif not current_details.get('address'):
                         current_details['address'] = text
                         log_and_print("INFO", f"Set address: {text}")
-                    detail_provided = True
+                        detail_provided = True
                     
                     # Update session with new details
                     self.session_manager.update_session(from_number, {
                         "details": current_details
                     })
-            
-            # Send updated status and next step
+                
+                # Send updated status and next step
                 log_and_print("INFO", f"Sending status update to user {user_id}")
                 
                 # Get updated session after changes
                 session = self.session_manager.get_session(from_number)
                 details = session.get('details', {})
                 
-            status_msg = "📝 Current details:\n\n"
+                status_msg = "📝 Current details:\n\n"
                 status_msg += f"Company: {details.get('company_name', '❌')}\n"
                 status_msg += f"Product: {details.get('product_name', '❌')}\n"
                 status_msg += f"Price: {details.get('price', '❌')}\n"
                 status_msg += f"Tagline: {details.get('tagline', '➖')}\n"
                 status_msg += f"Address: {details.get('address', '➖')}\n\n"
-            
-            # Check what's still needed
+                
+                # Check what's still needed
                 if not details.get('company_name'):
-                status_msg += "👉 Please send your company name.\n"
+                    status_msg += "👉 Please send your company name.\n"
                 elif not details.get('product_name'):
-                status_msg += "👉 Please send your product name.\n"
+                    status_msg += "👉 Please send your product name.\n"
                 elif not details.get('price'):
-                status_msg += "👉 Please send the price.\n"
-            else:
-                status_msg += "✅ All required information received!\n\n"
-                status_msg += "To generate the marketing image, send 'generate'\n"
-                status_msg += "To add optional details (tagline, address), just send them."
-            
+                    status_msg += "👉 Please send the price.\n"
+                else:
+                    status_msg += "✅ All required information received!\n\n"
+                    status_msg += "To generate the marketing image, send 'generate'\n"
+                    status_msg += "To add optional details (tagline, address), just send them."
+                
                 status_msg += "\n\nYou can type 'cancel' at any time to exit the process."
                 
                 self.whatsapp_client.send_message(from_number, status_msg)
-            return
-        
-        # Default state - waiting for command
-            # IMPORTANT: Only send messages if the user has explicitly sent 'edit' command
-            # Do nothing here for user isolation
+                return
             
-    except Exception as e:
+        except Exception as e:
             log_and_print("ERROR", f"Error handling text message from {from_number}: {str(e)}")
             traceback.print_exc()
             try:
@@ -1774,11 +1770,11 @@ class MarketingBot:
                 log_and_print("INFO", f"Sending error message to user {user_id}")
                 
                 self.whatsapp_client.send_message(
-                from_number,
-                "Sorry, an error occurred. Please try again.\n"
-                "Send 'edit' to start over."
-            )
-        except Exception as send_error:
+                    from_number,
+                    "Sorry, an error occurred. Please try again.\n"
+                    "Send 'edit' to start over."
+                )
+            except Exception as send_error:
                 log_and_print("ERROR", f"Failed to send error message: {str(send_error)}")
     
     def handle_image_message(self, from_number: str, webhook_data: Dict):
