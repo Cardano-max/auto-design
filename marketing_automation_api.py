@@ -271,13 +271,19 @@ IMPORTANT: Ensure the entire original subject is visible and not cropped in any 
                 marketing_prompt += f"\nIMPORTANT: Maintain the EXACT original aspect ratio ({original_aspect_ratio:.2f}) and ensure NO cropping of the image content. Keep all elements within visible boundaries."
                 
                 # Choose size parameter close to original aspect ratio
-                # Note: We'll use nearest standard size but will fix aspect ratio in post-processing if needed
-                if original_aspect_ratio > 1.2:  # Landscape orientation
-                    img_size = "2048x1024"  # Maximum width
-                    log_and_print("INFO", f"Using landscape format (2048x1024) for aspect ratio {original_aspect_ratio:.2f}")
+                # Note: OpenAI only supports: '1024x1024', '1024x1536', '1536x1024', and 'auto'
+                
+                # For extreme aspect ratios, use 'auto' which might do a better job of preserving content
+                if original_aspect_ratio > 2.0 or original_aspect_ratio < 0.5:
+                    img_size = "auto"
+                    log_and_print("INFO", f"Using 'auto' size for extreme aspect ratio {original_aspect_ratio:.2f}")
+                # For standard aspect ratios, use the closest predefined size
+                elif original_aspect_ratio > 1.2:  # Landscape orientation
+                    img_size = "1536x1024"  # Maximum allowed width
+                    log_and_print("INFO", f"Using landscape format (1536x1024) for aspect ratio {original_aspect_ratio:.2f}")
                 elif original_aspect_ratio < 0.8:  # Portrait orientation
-                    img_size = "1024x2048"  # Maximum height
-                    log_and_print("INFO", f"Using portrait format (1024x2048) for aspect ratio {original_aspect_ratio:.2f}")
+                    img_size = "1024x1536"  # Maximum allowed height
+                    log_and_print("INFO", f"Using portrait format (1024x1536) for aspect ratio {original_aspect_ratio:.2f}")
                 else:  # Near square
                     img_size = "1024x1024"
                     log_and_print("INFO", f"Using square format (1024x1024) for aspect ratio {original_aspect_ratio:.2f}")
@@ -325,8 +331,8 @@ IMPORTANT: Ensure the entire original subject is visible and not cropped in any 
             retry_delay = 2
             result = None
             
-            # Use HD quality for best results
-            quality = "low"  # Higher quality setting for better results
+            # Use low quality for testing (set to "hd" for production)
+            quality = "low"  # Set to "low" for testing to save API costs
 
             for retry in range(max_retries):
                 try:
