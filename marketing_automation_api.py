@@ -202,7 +202,10 @@ class ImageGenerator:
     def generate_marketing_image(self, product_image_path: str, product_details: Dict, product_type: str = "beverage", logo_image_path: str = None) -> Optional[str]:
         """
         Generate a marketing image using OpenAI API with gpt-image-1 model.
-        If logo_image_path is provided, it will be used as a reference image.
+        Uses a two-step process:
+        1. Generate a mask for the main subject
+        2. Apply edits to the background only using the mask
+        If logo_image_path is provided, it will be mentioned in the prompt.
         Returns the output image path or None on failure.
         """
         try:
@@ -212,19 +215,27 @@ class ImageGenerator:
             # Use global logger instead of self.logger
             log_and_print("INFO", f"Generating marketing image for {product_name}")
             
-            # 1. Build the prompt
+            # 1. Build the prompt for final edit (will be used in second step)
             if product_type.lower() == "beverage":
-                prompt = PromptTemplates.get_beverage_template(product_details)
+                edit_prompt = PromptTemplates.get_beverage_template(product_details)
             elif product_type.lower() == "food":
-                prompt = PromptTemplates.get_food_template(product_details)
+                edit_prompt = PromptTemplates.get_food_template(product_details)
             else:
-                prompt = PromptTemplates.get_master_template(product_details)
+                edit_prompt = PromptTemplates.get_master_template(product_details)
                 
-            # Enhance the prompt to be more specific about what to modify vs. preserve
-            preservation_instruction = "IMPORTANT: Preserve the original product exactly as shown in the image. Only add the requested design elements, text, and branding around it."
-            prompt = f"{prompt}\n\n{preservation_instruction}"
+            # Add mask-specific instructions to ensure background-only editing
+            mask_instruction = "Using the provided mask (which preserves the subject exactly), overlay these marketing elements on the background only:\n"
+            mask_instruction += "- Company name, product name, price badge, and tagline in the specified positions\n"
+            mask_instruction += "Do not alter the main subject at all. Leave its dimensions unchanged. Only paint in the masked-out areas."
             
-            log_and_print("INFO", f"Prompt for image generation: {prompt[:100]}...")
+            # If logo is provided, include it in the instructions
+            if logo_image_path:
+                mask_instruction += "\n- Include the provided logo in the top-left corner"
+                
+            # Combine the edit prompt with mask instructions
+            edit_prompt = f"{edit_prompt}\n\n{mask_instruction}"
+            
+            log_and_print("INFO", f"Final edit prompt: {edit_prompt[:100]}...")
 
             # 2. Ensure images are PNG and not too large
             if not os.path.exists(product_image_path):
@@ -270,63 +281,130 @@ class ImageGenerator:
                         logo_image_path = resized_path
                         log_and_print("INFO", f"Logo image resized to {new_width}x{new_height}")
 
-            # 3. Prepare API call
-            log_and_print("INFO", "Sending image edit request to OpenAI API (gpt-image-1)")
+            # 3. Prepare for API calls
             max_retries = 3
             retry_delay = 2
-            result = None
+            mask_result = None
+            final_result = None
             
-            # Use lower quality for testing to save credits (standard or hd)
+            # Use low quality for testing to save credits
             quality = "low"  # Use "hd" for higher quality
-
+            
+            # STEP 1: First API call to generate the mask
+            log_and_print("INFO", "STEP 1: Generating mask using GPT-image-1")
+            mask_prompt = "Generate a precise mask for the main subject of this image. Keep the subject exactly the same (no changes), and output a white-on-black mask with the subject in white and everything else in black."
+            
             for retry in range(max_retries):
                 try:
                     with open(product_image_path, "rb") as product_file:
-                        if logo_image_path:
-                            # Use multiple image inputs for logo-based editing (simpler approach)
-                            log_and_print("INFO", f"Using logo image for reference: {logo_image_path}")
-                            with open(logo_image_path, "rb") as logo_file:
-                                result = self.client.images.edit(
-                                    model="gpt-image-1",
-                                    prompt=prompt,
-                                    image=[product_file, logo_file],
-                                    size="1024x1024",
-                                    quality=quality,
-                                    n=1
-                                )
-                        else:
-                            # Direct edit without mask - simpler approach
-                            log_and_print("INFO", "Using direct edit without mask")
-                            result = self.client.images.edit(
-                                model="gpt-image-1",
-                                prompt=prompt,
-                                image=product_file,
-                                size="1024x1024",
-                                quality=quality,
-                                n=1
-                            )
+                        mask_result = self.client.images.edit(
+                            model="gpt-image-1",
+                            prompt=mask_prompt,
+                            image=product_file,
+                            size="1024x1024",
+                            quality=quality,
+                            n=1
+                        )
                     
-                    log_and_print("INFO", "API call successful")
+                    log_and_print("INFO", "Mask generation successful")
                     break
                 except Exception as retry_error:
-                    log_and_print("WARNING", f"API call attempt {retry+1} failed: {str(retry_error)}")
+                    log_and_print("WARNING", f"Mask generation attempt {retry+1} failed: {str(retry_error)}")
                     if retry < max_retries - 1:
                         log_and_print("INFO", f"Retrying in {retry_delay} seconds...")
                         time.sleep(retry_delay)
                         retry_delay *= 2
                     else:
-                        log_and_print("ERROR", "All API call retries failed")
+                        log_and_print("ERROR", "All mask generation retries failed")
                         return None
-
-            # 4. Process the result
-            if hasattr(result, 'data') and len(result.data) > 0 and hasattr(result.data[0], 'b64_json'):
-                b64_data = result.data[0].b64_json
-                image_bytes = base64.b64decode(b64_data)
-            else:
-                log_and_print("ERROR", "No image data in response")
+            
+            # Process the mask result
+            if not hasattr(mask_result, 'data') or len(mask_result.data) == 0 or not hasattr(mask_result.data[0], 'b64_json'):
+                log_and_print("ERROR", "No mask data in response")
                 return None
                 
-            # 5. Save the image
+            # Convert mask to grayscale with alpha channel
+            mask_bytes = base64.b64decode(mask_result.data[0].b64_json)
+            mask_img = Image.open(BytesIO(mask_bytes)).convert("L")
+            
+            # Save raw mask for debugging
+            debug_mask_path = f"{os.path.splitext(product_image_path)[0]}_mask_debug.png"
+            mask_img.save(debug_mask_path)
+            log_and_print("INFO", f"Raw mask saved to {debug_mask_path}")
+            
+            # Convert to RGBA and add alpha channel
+            mask_rgba = mask_img.convert("RGBA")
+            mask_rgba.putalpha(mask_img)
+            
+            # Save mask with alpha channel
+            mask_path = f"{os.path.splitext(product_image_path)[0]}_mask.png"
+            mask_rgba.save(mask_path)
+            log_and_print("INFO", f"Mask with alpha channel saved to {mask_path}")
+            
+            # STEP 2: Second API call for masked edit
+            log_and_print("INFO", "STEP 2: Applying masked edit using GPT-image-1")
+            
+            for retry in range(max_retries):
+                try:
+                    with open(product_image_path, "rb") as product_file:
+                        with open(mask_path, "rb") as mask_file:
+                            # Use logo as part of the input for multi-image
+                            if logo_image_path:
+                                log_and_print("INFO", f"Including logo in edit: {logo_image_path}")
+                                with open(logo_image_path, "rb") as logo_file:
+                                    final_result = self.client.images.edit(
+                                        model="gpt-image-1",
+                                        prompt=edit_prompt,
+                                        image=[product_file, logo_file],
+                                        mask=mask_file,
+                                        size="1024x1024",
+                                        quality=quality,
+                                        n=1
+                                    )
+                            else:
+                                final_result = self.client.images.edit(
+                                    model="gpt-image-1",
+                                    prompt=edit_prompt,
+                                    image=product_file,
+                                    mask=mask_file,
+                                    size="1024x1024",
+                                    quality=quality,
+                                    n=1
+                                )
+                        
+                    log_and_print("INFO", "Masked edit successful")
+                    break
+                except Exception as retry_error:
+                    log_and_print("WARNING", f"Masked edit attempt {retry+1} failed: {str(retry_error)}")
+                    if retry < max_retries - 1:
+                        log_and_print("INFO", f"Retrying in {retry_delay} seconds...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                    else:
+                        log_and_print("ERROR", "All masked edit retries failed")
+                        # Clean up temp files
+                        try:
+                            os.remove(mask_path)
+                            os.remove(debug_mask_path)
+                        except:
+                            pass
+                        return None
+
+            # Process the final result
+            if hasattr(final_result, 'data') and len(final_result.data) > 0 and hasattr(final_result.data[0], 'b64_json'):
+                b64_data = final_result.data[0].b64_json
+                image_bytes = base64.b64decode(b64_data)
+            else:
+                log_and_print("ERROR", "No image data in final response")
+                # Clean up temp files
+                try:
+                    os.remove(mask_path)
+                    os.remove(debug_mask_path)
+                except:
+                    pass
+                return None
+                
+            # Save the final image
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
             product_name_safe = ''.join(c if c.isalnum() else '_' for c in product_name)[:20]
             output_filename = f"{product_name_safe}_{timestamp}.png"
@@ -335,6 +413,14 @@ class ImageGenerator:
             with open(output_path, 'wb') as f:
                 f.write(image_bytes)
             log_and_print("INFO", f"Marketing image saved to {output_path}")
+
+            # Clean up temp files
+            try:
+                os.remove(mask_path)
+                os.remove(debug_mask_path)
+                log_and_print("INFO", "Cleaned up temporary mask files")
+            except Exception as e:
+                log_and_print("WARNING", f"Failed to clean up temporary files: {str(e)}")
 
             processing_time = time.time() - start_time
             log_and_print("INFO", f"Total processing time: {processing_time:.2f} seconds")
