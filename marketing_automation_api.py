@@ -21,6 +21,7 @@ from io import BytesIO
 from flask import Flask, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 import requests
+from PIL import ImageDraw
 
 # Load environment variables
 load_dotenv()
@@ -285,49 +286,55 @@ class ImageGenerator:
                                     n=1
                                 )
                         else:
-                            # Generate mask for product image
-                            mask_prompt = "Generate a mask for the main subject in the image, keeping the subject intact while allowing background changes. Use white for the subject and black for the background."
+                            # Instead of generating a mask via API, create a simple mask that ensures
+                            # same dimensions as the input image
+                            log_and_print("INFO", "Creating mask with same dimensions as input image")
                             
-                            # First API call to generate mask
-                            mask_result = self.client.images.edit(
-                                model="gpt-image-1",
-                                prompt=mask_prompt,
-                                image=product_file,
-                                size="1024x1024",
-                                n=1
-                            )
-                            
-                            if mask_result.data and mask_result.data[0].b64_json:
-                                # Convert mask to RGBA with alpha channel
-                                mask_bytes = base64.b64decode(mask_result.data[0].b64_json)
-                                mask_img = Image.open(BytesIO(mask_bytes)).convert("L")
+                            # Open the input image to get dimensions
+                            with Image.open(product_image_path) as input_img:
+                                width, height = input_img.size
+                                
+                                # Create a simple mask - white rectangle with black background
+                                # White (255) represents areas to keep, black (0) for areas to modify
+                                mask_img = Image.new('L', (width, height), 0)  # Black background
+                                
+                                # Calculate a border around the center (20% from each edge)
+                                border_w = int(width * 0.2)
+                                border_h = int(height * 0.2)
+                                
+                                # Create a white rectangle for the center portion (subject)
+                                mask_draw = ImageDraw.Draw(mask_img)
+                                mask_draw.rectangle(
+                                    [border_w, border_h, width - border_w, height - border_h],
+                                    fill=255  # White
+                                )
+                                
+                                # Convert to RGBA and add alpha channel (this is crucial for GPT-image-1)
                                 mask_rgba = mask_img.convert("RGBA")
-                                mask_rgba.putalpha(mask_img)
+                                mask_rgba.putalpha(mask_img)  # Use mask as alpha channel
                                 
                                 # Save mask temporarily
                                 mask_path = f"{os.path.splitext(product_image_path)[0]}_mask.png"
                                 mask_rgba.save(mask_path)
-                                
-                                # Second API call with mask
-                                with open(product_image_path, "rb") as product_file:
-                                    with open(mask_path, "rb") as mask_file:
-                                        result = self.client.images.edit(
-                                            model="gpt-image-1",
-                                            prompt=prompt,
-                                            image=product_file,
-                                            mask=mask_file,
-                                            size="1024x1024",
-                                            n=1
-                                        )
-                                
-                                # Clean up mask file
-                                try:
-                                    os.remove(mask_path)
-                                except:
-                                    pass
-                            else:
-                                log_and_print("ERROR", "Failed to generate mask")
-                                return None
+                                log_and_print("INFO", f"Created mask with dimensions {width}x{height} and alpha channel")
+                            
+                            # Second API call with mask
+                            with open(product_image_path, "rb") as product_file:
+                                with open(mask_path, "rb") as mask_file:
+                                    result = self.client.images.edit(
+                                        model="gpt-image-1",
+                                        prompt=prompt,
+                                        image=product_file,
+                                        mask=mask_file,
+                                        size="1024x1024",
+                                        n=1
+                                    )
+                            
+                            # Clean up mask file
+                            try:
+                                os.remove(mask_path)
+                            except:
+                                pass
                     
                     log_and_print("INFO", "API call successful")
                     break
