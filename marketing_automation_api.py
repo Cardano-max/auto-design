@@ -250,6 +250,7 @@ Create a premium marketing poster:
 Use a light gradient background that complements the subject.
 Ensure all text is perfectly readable and professionally positioned.
 Create a balanced, high-end marketing design while preserving the original subject exactly.
+IMPORTANT: Ensure the entire original subject is visible and not cropped in any way.
 """
             
             log_and_print("INFO", f"Direct marketing prompt: {marketing_prompt[:100]}...")
@@ -261,6 +262,22 @@ Create a balanced, high-end marketing design while preserving the original subje
 
             # Process product image
             with Image.open(product_image_path) as img:
+                # Determine the best aspect ratio based on the input image
+                width, height = img.size
+                aspect_ratio = width / height
+                
+                # Choose the appropriate size parameter based on aspect ratio
+                # WhatsApp works best with these standard sizes
+                if aspect_ratio > 1.2:  # Landscape orientation
+                    img_size = "1536x1024"
+                    log_and_print("INFO", f"Using landscape format (1536x1024) for aspect ratio {aspect_ratio:.2f}")
+                elif aspect_ratio < 0.8:  # Portrait orientation
+                    img_size = "1024x1536"
+                    log_and_print("INFO", f"Using portrait format (1024x1536) for aspect ratio {aspect_ratio:.2f}")
+                else:  # Near square
+                    img_size = "1024x1024"
+                    log_and_print("INFO", f"Using square format (1024x1024) for aspect ratio {aspect_ratio:.2f}")
+                
                 if img.format != 'PNG':
                     converted_path = f"{os.path.splitext(product_image_path)[0]}_converted.png"
                     img.save(converted_path, format="PNG")
@@ -318,7 +335,7 @@ Create a balanced, high-end marketing design while preserving the original subje
                                     model="gpt-image-1",
                                     prompt=marketing_prompt,
                                     image=[product_file, logo_file],
-                                    size="1024x1024",
+                                    size=img_size,  # Using determined size based on aspect ratio
                                     quality=quality,
                                     n=1
                                 )
@@ -328,7 +345,7 @@ Create a balanced, high-end marketing design while preserving the original subje
                                 model="gpt-image-1",
                                 prompt=marketing_prompt,
                                 image=product_file,
-                                size="1024x1024",
+                                size=img_size,  # Using determined size based on aspect ratio
                                 quality=quality,
                                 n=1
                             )
