@@ -321,8 +321,8 @@ IMPORTANT: Ensure the entire original subject is visible and not cropped in any 
             retry_delay = 2
             result = None
             
-            # Use low quality for testing to save credits
-            quality = "low"  # Use "hd" for higher quality
+            # Use HD quality for best results
+            quality = "low"  # Higher quality setting for better results
 
             for retry in range(max_retries):
                 try:
@@ -370,7 +370,7 @@ IMPORTANT: Ensure the entire original subject is visible and not cropped in any 
                 log_and_print("ERROR", "No image data in response")
                 return None
                 
-            # Save the image
+            # Save the image directly from OpenAI response bytes without additional processing
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
             product_name_safe = ''.join(c if c.isalnum() else '_' for c in product_name)[:20]
             output_filename = f"{product_name_safe}_{timestamp}.png"
@@ -378,7 +378,7 @@ IMPORTANT: Ensure the entire original subject is visible and not cropped in any 
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             with open(output_path, 'wb') as f:
                 f.write(image_bytes)
-            log_and_print("INFO", f"Marketing image saved to {output_path}")
+            log_and_print("INFO", f"Marketing image saved to {output_path} without additional processing")
 
             processing_time = time.time() - start_time
             log_and_print("INFO", f"Total processing time: {processing_time:.2f} seconds")
@@ -675,8 +675,17 @@ class MaytapiClient:
             log_and_print("INFO", f"Sending media from URL to {to_number}")
             data["message"] = media_url
         elif media_base64:
-            log_and_print("INFO", f"Sending media from base64 to {to_number}, base64 length: {len(media_base64)} chars")
-            data["message"] = f"data:image/png;base64,{media_base64}"
+            # Determine image format from filename or default to png
+            image_format = "png"
+            if filename and '.' in filename:
+                ext = filename.split('.')[-1].lower()
+                if ext in ['jpg', 'jpeg', 'png', 'gif', 'webp']:
+                    image_format = ext
+                    if image_format == 'jpeg':
+                        image_format = 'jpg'  # standardize jpeg to jpg
+            
+            log_and_print("INFO", f"Sending media from base64 to {to_number}, format: {image_format}, base64 length: {len(media_base64)} chars")
+            data["message"] = f"data:image/{image_format};base64,{media_base64}"
             
             # Set filename if provided
             if filename:
@@ -1634,6 +1643,7 @@ class MarketingBot:
                     print(f"[DEBUG] File size: {os.path.getsize(image_path)} bytes")
                     
                     try:
+                        # Read image bytes directly without any manipulation
                         with open(image_path, 'rb') as img_file:
                             img_data = img_file.read()
                             print(f"[DEBUG] Image data read: {len(img_data)} bytes")
@@ -1648,8 +1658,8 @@ class MarketingBot:
                         )
                         return
                     
-                    # Send the generated image
-                    log_and_print("INFO", f"Sending generated image to user {user_id}")
+                    # Send the generated image without modifications
+                    log_and_print("INFO", f"Sending original unmodified image to user {user_id}")
                     media_result = self.whatsapp_client.send_media(
                         to_number=from_number,
                         caption="🎉 Here's your marketing image!\n\n"
