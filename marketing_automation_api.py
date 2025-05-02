@@ -202,10 +202,8 @@ class ImageGenerator:
     def generate_marketing_image(self, product_image_path: str, product_details: Dict, product_type: str = "beverage", logo_image_path: str = None) -> Optional[str]:
         """
         Generate a marketing image using OpenAI API with gpt-image-1 model.
-        Uses a two-step process:
-        1. Generate a mask for the main subject
-        2. Apply edits to the background only using the mask
-        If logo_image_path is provided, it will be mentioned in the prompt.
+        Uses a direct prompt approach with a single API call.
+        If logo_image_path is provided, it will be incorporated in the prompt.
         Returns the output image path or None on failure.
         """
         try:
@@ -215,56 +213,48 @@ class ImageGenerator:
             # Use global logger instead of self.logger
             log_and_print("INFO", f"Generating marketing image for {product_name}")
             
-            # 1. Build the prompt for final edit (will be used in second step)
+            # Build the enhanced direct prompt
+            marketing_prompt = f"""
+Create a premium marketing poster:
+- Keep the original subject EXACTLY as-is with no changes or distortions.
+- Overlay company name "{product_details.get('company_name', '')}" at top-center in bold, elegant font.
+- Place product name "{product_details.get('product_name', '')}" below the subject in attractive typography.
+- Add price badge "{product_details.get('price', '')}" in bottom-right corner with eye-catching design.
+- Include tagline "{product_details.get('tagline', '')}" beneath product name in stylish font.
+- Show address "{product_details.get('address', '')}" in small font at bottom.
+"""
+
+            # Add product-specific enhancements based on type
             if product_type.lower() == "beverage":
-                edit_prompt = PromptTemplates.get_beverage_template(product_details)
+                marketing_prompt += """
+- Add subtle steam effects for hot drinks or condensation for cold drinks.
+- Use warm, inviting colors that complement the beverage.
+- Create an atmosphere that enhances the drink's appeal.
+"""
             elif product_type.lower() == "food":
-                edit_prompt = PromptTemplates.get_food_template(product_details)
-            else:
-                edit_prompt = PromptTemplates.get_master_template(product_details)
-                
-            # Add mask-specific instructions to ensure background-only editing
-            mask_instruction = """EDITING INSTRUCTIONS (Using provided mask):
-
-1. PRESERVE THE PRODUCT EXACTLY:
-   - The white areas in the mask represent the product - DO NOT modify these areas in ANY way
-   - Maintain 100% of the product's original appearance, including all details, colors, textures, reflections
-   - Preserve the product's exact position, scale, and orientation - NO resizing or repositioning
-
-2. BACKGROUND REPLACEMENT (Black areas in mask):
-   - Replace ONLY the black areas in the mask (the background) with a professional marketing design
-   - Create a complementary background that enhances but doesn't compete with the product
-   - Ensure smooth transitions between the preserved product and the new background
-
-3. BRANDING ELEMENT PLACEMENT (In background only):
-   - Company name: Position "{product_details.get('company_name', '')}" at the top in a premium, legible font
-   - Product name: Place "{product_details.get('product_name', '')}" below the product in bold, prominent typography
-   - Price: Position "{product_details.get('price', '')}" in an eye-catching circular badge in the bottom right corner
-   - Tagline: Add "{product_details.get('tagline', '')}" between company name and product image in elegant styling
-   - Address: Include "{product_details.get('address', '')}" in smaller font at the bottom for reference
-
-4. PROFESSIONAL AESTHETIC:
-   - Use a color palette that complements the product's colors
-   - Apply subtle shadows or lighting effects to integrate the product naturally
-   - Ensure all text is positioned for maximum readability
-   - Create a balanced, visually appealing composition that draws attention to the product"""
-
-            # If logo is provided, include it in the instructions
-            if logo_image_path:
-                mask_instruction += """
-
-5. LOGO PLACEMENT:
-   - Position the provided logo in the top-left corner of the image
-   - Size the logo appropriately (not too large or small) - approximately 10-15% of the image width
-   - Ensure the logo maintains its proper proportions and quality
-   - Create visual harmony between the logo and other design elements"""
-                
-            # Combine the edit prompt with mask instructions
-            edit_prompt = f"{edit_prompt}\n\n{mask_instruction}"
+                marketing_prompt += """
+- Enhance food presentation with subtle lighting effects.
+- Use colors that stimulate appetite and complement the food.
+- Create a premium restaurant-quality aesthetic.
+"""
             
-            log_and_print("INFO", f"Final edit prompt: {edit_prompt[:100]}...")
+            # Add logo instruction if provided
+            if logo_image_path:
+                marketing_prompt += """
+- Place the provided logo in the top-left corner at appropriate size.
+- Ensure the logo integrates well with the overall design.
+"""
+            
+            # Add final quality instructions
+            marketing_prompt += """
+Use a light gradient background that complements the subject.
+Ensure all text is perfectly readable and professionally positioned.
+Create a balanced, high-end marketing design while preserving the original subject exactly.
+"""
+            
+            log_and_print("INFO", f"Direct marketing prompt: {marketing_prompt[:100]}...")
 
-            # 2. Ensure images are PNG and not too large
+            # Ensure images are PNG and not too large
             if not os.path.exists(product_image_path):
                 log_and_print("ERROR", f"Product image not found at path: {product_image_path}")
                 return None
@@ -308,149 +298,62 @@ class ImageGenerator:
                         logo_image_path = resized_path
                         log_and_print("INFO", f"Logo image resized to {new_width}x{new_height}")
 
-            # 3. Prepare for API calls
+            # Direct editing approach - single API call
+            log_and_print("INFO", "Using direct prompt editing approach")
             max_retries = 3
             retry_delay = 2
-            mask_result = None
-            final_result = None
+            result = None
             
             # Use low quality for testing to save credits
             quality = "low"  # Use "hd" for higher quality
-            
-            # STEP 1: First API call to generate the mask
-            log_and_print("INFO", "STEP 1: Generating mask using GPT-image-1")
-            mask_prompt = """Generate a high-precision binary mask for the main product/subject in this image with the following specifications:
 
-1. OUTPUT FORMAT: Create a pure black and white mask where:
-   - The main product/subject is PURE WHITE (255,255,255)
-   - The background and all non-product elements are PURE BLACK (0,0,0)
-   - No gray values or anti-aliasing at edges - use hard boundaries
-
-2. SUBJECT IDENTIFICATION:
-   - The main subject is the central product (food/beverage/item) that needs to be preserved exactly
-   - Include ALL parts of the product (including any packaging, container, garnish, or accessories that are part of the product)
-   - For beverages: include the entire glass/cup/container and any straws/garnishes
-   - For food: include the plate/bowl/container and any visible garnishes directly on the food
-
-3. MASK PRECISION:
-   - Create pixel-perfect boundaries around the subject
-   - Capture fine details like product edges, transparent elements, and thin structures
-   - Ensure the mask covers 100% of the product with NO missing areas
-   - Do not include shadows cast by the product (unless they're integral to the product's appearance)
-
-This mask will be used to protect the product while allowing background replacement, so accuracy is critical."""
-            
             for retry in range(max_retries):
                 try:
-                    with open(product_image_path, "rb") as product_file:
-                        mask_result = self.client.images.edit(
-                            model="gpt-image-1",
-                            prompt=mask_prompt,
-                            image=product_file,
-                            size="1024x1024",
-                            quality=quality,
-                            n=1
-                        )
-                    
-                    log_and_print("INFO", "Mask generation successful")
-                    break
-                except Exception as retry_error:
-                    log_and_print("WARNING", f"Mask generation attempt {retry+1} failed: {str(retry_error)}")
-                    if retry < max_retries - 1:
-                        log_and_print("INFO", f"Retrying in {retry_delay} seconds...")
-                        time.sleep(retry_delay)
-                        retry_delay *= 2
-                    else:
-                        log_and_print("ERROR", "All mask generation retries failed")
-                        return None
-            
-            # Process the mask result
-            if not hasattr(mask_result, 'data') or len(mask_result.data) == 0 or not hasattr(mask_result.data[0], 'b64_json'):
-                log_and_print("ERROR", "No mask data in response")
-                return None
-                
-            # Convert mask to grayscale with alpha channel
-            mask_bytes = base64.b64decode(mask_result.data[0].b64_json)
-            mask_img = Image.open(BytesIO(mask_bytes)).convert("L")
-            
-            # Save raw mask for debugging
-            debug_mask_path = f"{os.path.splitext(product_image_path)[0]}_mask_debug.png"
-            mask_img.save(debug_mask_path)
-            log_and_print("INFO", f"Raw mask saved to {debug_mask_path}")
-            
-            # Convert to RGBA and add alpha channel
-            mask_rgba = mask_img.convert("RGBA")
-            mask_rgba.putalpha(mask_img)
-            
-            # Save mask with alpha channel
-            mask_path = f"{os.path.splitext(product_image_path)[0]}_mask.png"
-            mask_rgba.save(mask_path)
-            log_and_print("INFO", f"Mask with alpha channel saved to {mask_path}")
-            
-            # STEP 2: Second API call for masked edit
-            log_and_print("INFO", "STEP 2: Applying masked edit using GPT-image-1")
-            
-            for retry in range(max_retries):
-                try:
-                    with open(product_image_path, "rb") as product_file:
-                        with open(mask_path, "rb") as mask_file:
-                            # Use logo as part of the input for multi-image
-                            if logo_image_path:
-                                log_and_print("INFO", f"Including logo in edit: {logo_image_path}")
-                                with open(logo_image_path, "rb") as logo_file:
-                                    final_result = self.client.images.edit(
-                                        model="gpt-image-1",
-                                        prompt=edit_prompt,
-                                        image=[product_file, logo_file],
-                                        mask=mask_file,
-                                        size="1024x1024",
-                                        quality=quality,
-                                        n=1
-                                    )
-                            else:
-                                final_result = self.client.images.edit(
+                    # Use different approach based on whether logo is provided
+                    if logo_image_path:
+                        log_and_print("INFO", f"Including logo in edit: {logo_image_path}")
+                        with open(product_image_path, "rb") as product_file:
+                            with open(logo_image_path, "rb") as logo_file:
+                                result = self.client.images.edit(
                                     model="gpt-image-1",
-                                    prompt=edit_prompt,
-                                    image=product_file,
-                                    mask=mask_file,
+                                    prompt=marketing_prompt,
+                                    image=[product_file, logo_file],
                                     size="1024x1024",
                                     quality=quality,
                                     n=1
                                 )
-                        
-                    log_and_print("INFO", "Masked edit successful")
+                    else:
+                        with open(product_image_path, "rb") as product_file:
+                            result = self.client.images.edit(
+                                model="gpt-image-1",
+                                prompt=marketing_prompt,
+                                image=product_file,
+                                size="1024x1024",
+                                quality=quality,
+                                n=1
+                            )
+                    
+                    log_and_print("INFO", "Direct edit API call successful")
                     break
                 except Exception as retry_error:
-                    log_and_print("WARNING", f"Masked edit attempt {retry+1} failed: {str(retry_error)}")
+                    log_and_print("WARNING", f"API call attempt {retry+1} failed: {str(retry_error)}")
                     if retry < max_retries - 1:
                         log_and_print("INFO", f"Retrying in {retry_delay} seconds...")
                         time.sleep(retry_delay)
                         retry_delay *= 2
                     else:
-                        log_and_print("ERROR", "All masked edit retries failed")
-                        # Clean up temp files
-                        try:
-                            os.remove(mask_path)
-                            os.remove(debug_mask_path)
-                        except:
-                            pass
+                        log_and_print("ERROR", "All API call retries failed")
                         return None
 
-            # Process the final result
-            if hasattr(final_result, 'data') and len(final_result.data) > 0 and hasattr(final_result.data[0], 'b64_json'):
-                b64_data = final_result.data[0].b64_json
+            # Process the result
+            if hasattr(result, 'data') and len(result.data) > 0 and hasattr(result.data[0], 'b64_json'):
+                b64_data = result.data[0].b64_json
                 image_bytes = base64.b64decode(b64_data)
             else:
-                log_and_print("ERROR", "No image data in final response")
-                # Clean up temp files
-                try:
-                    os.remove(mask_path)
-                    os.remove(debug_mask_path)
-                except:
-                    pass
+                log_and_print("ERROR", "No image data in response")
                 return None
                 
-            # Save the final image
+            # Save the image
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
             product_name_safe = ''.join(c if c.isalnum() else '_' for c in product_name)[:20]
             output_filename = f"{product_name_safe}_{timestamp}.png"
@@ -459,14 +362,6 @@ This mask will be used to protect the product while allowing background replacem
             with open(output_path, 'wb') as f:
                 f.write(image_bytes)
             log_and_print("INFO", f"Marketing image saved to {output_path}")
-
-            # Clean up temp files
-            try:
-                os.remove(mask_path)
-                os.remove(debug_mask_path)
-                log_and_print("INFO", "Cleaned up temporary mask files")
-            except Exception as e:
-                log_and_print("WARNING", f"Failed to clean up temporary files: {str(e)}")
 
             processing_time = time.time() - start_time
             log_and_print("INFO", f"Total processing time: {processing_time:.2f} seconds")
