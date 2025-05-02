@@ -4,14 +4,7 @@ Marketing Image Generator - Maytapi WhatsApp Version
 --------------------------------------------
 Production version with Maytapi WhatsApp API integration
 Configured for Railway.com deployment
-Fixed issues:
-- Exclusive gpt-image-1 model usage (no DALL-E fallback)
-- Proper user session isolation
-- Edit command triggering only for the specific user
-- Complete session termination after generate
-- Improved image handling
-- Fixed repeated welcome message issue
-- Fixed audio message handling
+URGENT FIX: Fixed welcome message and image processing issues
 """
 
 import os
@@ -68,6 +61,9 @@ processed_messages = {}
 
 # Store last message time for rate limiting
 last_message_time = {}
+
+# Store all welcomed users so we never welcome them again
+welcomed_users = set()
 
 # Initialize OpenAI API key
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
@@ -425,6 +421,36 @@ class MaytapiClient:
             traceback.print_exc()
             return {"success": False, "error": str(e)}
     
+    def get_media_content(self, message_id: str) -> Optional[bytes]:
+        """Fetch media content directly from Maytapi API using message ID
+        
+        Args:
+            message_id: The ID of the message containing media
+            
+        Returns:
+            Optional bytes of media content
+        """
+        try:
+            # Construct endpoint for media content
+            endpoint = f"/{self.phone_id}/getMedia/{message_id}"
+            
+            # Make request to fetch media
+            log_and_print("INFO", f"Fetching media content for message ID: {message_id}")
+            url = f"{self.api_base_url}{endpoint}"
+            response = requests.get(url, headers=self.headers)
+            
+            # Check if successful
+            if response.status_code == 200:
+                log_and_print("INFO", f"Successfully fetched media content, size: {len(response.content)} bytes")
+                return response.content
+            else:
+                log_and_print("ERROR", f"Failed to fetch media content: {response.status_code}")
+                return None
+                
+        except Exception as e:
+            log_and_print("ERROR", f"Error fetching media content: {str(e)}")
+            return None
+    
     def send_message(self, to_number: str, message: str, typing: bool = True) -> Dict:
         """Send a text message via WhatsApp
         
@@ -618,6 +644,10 @@ class SessionManager:
             New session dictionary
         """
         user_id = self.get_user_id(from_number)
+        
+        # Check if this user has been welcomed before globally
+        is_welcomed = user_id in welcomed_users
+        
         session = {
             "user_id": user_id,
             "phone_number": from_number,
@@ -626,10 +656,10 @@ class SessionManager:
             "details": {},
             "created_at": datetime.now().isoformat(),
             "last_active": datetime.now().isoformat(),
-            "welcomed": False,  # Track if welcome message has been sent
+            "welcomed": is_welcomed,  # Use global record of welcomed status
         }
         self.sessions[user_id] = session
-        log_and_print("INFO", f"Created new session for user {user_id}")
+        log_and_print("INFO", f"Created new session for user {user_id}, welcomed={is_welcomed}")
         return session
     
     def get_session(self, from_number: str, create_if_not_exists: bool = True) -> Dict:
@@ -669,6 +699,12 @@ class SessionManager:
         session = self.get_session(from_number)
         for key, value in update_data.items():
             session[key] = value
+            
+            # If welcomed status is being updated to True, also update global welcomed_users
+            if key == 'welcomed' and value == True:
+                user_id = self.get_user_id(from_number)
+                welcomed_users.add(user_id)
+                log_and_print("INFO", f"Added user {user_id} to global welcomed users list")
         
         # Update last active time
         session["last_active"] = datetime.now().isoformat()
@@ -692,8 +728,8 @@ class SessionManager:
         user_id = self.get_user_id(from_number)
         
         if user_id in self.sessions:
-            # Get existing welcomed state
-            welcomed = self.sessions[user_id].get('welcomed', False)
+            # Get existing welcomed state from global welcomed_users
+            is_welcomed = user_id in welcomed_users
             
             # Reset session to initial state, but keep welcomed state
             self.sessions[user_id] = {
@@ -704,12 +740,33 @@ class SessionManager:
                 "details": {},
                 "created_at": datetime.now().isoformat(),
                 "last_active": datetime.now().isoformat(),
-                "welcomed": welcomed  # Preserve welcomed status
+                "welcomed": is_welcomed  # Use global welcomed state
             }
-            log_and_print("INFO", f"Ended session for user {user_id}, preserved welcomed state: {welcomed}")
+            log_and_print("INFO", f"Ended session for user {user_id}, preserved welcomed state: {is_welcomed}")
             return True
         
         return False
+    
+    def set_welcomed(self, from_number: str, welcomed: bool = True) -> None:
+        """Set a user as welcomed in the global registry
+        
+        Args:
+            from_number: User's WhatsApp number
+            welcomed: Whether the user has been welcomed
+        """
+        user_id = self.get_user_id(from_number)
+        
+        if welcomed:
+            welcomed_users.add(user_id)
+            log_and_print("INFO", f"Marked user {user_id} as welcomed in global registry")
+        elif user_id in welcomed_users:
+            welcomed_users.remove(user_id)
+            log_and_print("INFO", f"Removed user {user_id} from welcomed registry")
+        
+        # Also update in current session if it exists
+        if user_id in self.sessions:
+            self.sessions[user_id]['welcomed'] = welcomed
+            log_and_print("INFO", f"Updated welcomed status in session for user {user_id}: {welcomed}")
     
     def clean_old_sessions(self, max_age_hours: int = 24) -> int:
         """Clean up sessions older than specified hours
@@ -746,8 +803,11 @@ class SessionManager:
 class ImageHandler:
     """Handles image processing and storage"""
     
-    @staticmethod
-    def save_image_from_bytes(image_bytes: bytes, user_id: str, filename: str = None) -> Tuple[str, bool]:
+    def __init__(self, maytapi_client: MaytapiClient):
+        """Initialize with MaytapiClient for direct image fetching"""
+        self.maytapi_client = maytapi_client
+    
+    def save_image_from_bytes(self, image_bytes: bytes, user_id: str, filename: str = None) -> Tuple[str, bool]:
         """Save image bytes to disk
         
         Args:
@@ -796,73 +856,156 @@ class ImageHandler:
             log_and_print("ERROR", f"Error saving image: {str(e)}")
             return None, False
     
-    @staticmethod
-    def extract_image_from_whatsapp(media_data: Any) -> Optional[bytes]:
-        """Extract image bytes from WhatsApp message data
+    def extract_image_from_maytapi(self, webhook_data: Dict) -> Optional[bytes]:
+        """Extract image bytes from Maytapi webhook data - completely rewritten version
         
         Args:
-            media_data: Media data from WhatsApp message
+            webhook_data: Full webhook data from Maytapi
             
         Returns:
             Image bytes or None if extraction failed
         """
         try:
-            image_bytes = None
+            log_and_print("INFO", "Attempting to extract image from Maytapi webhook data")
             
-            # Print media data structure for debugging
-            print(f"[DEBUG] Media data type: {type(media_data)}")
-            print(f"[DEBUG] Media data: {json.dumps(media_data) if isinstance(media_data, dict) else 'Not a dict'}")
+            # STRATEGY 1: Direct message ID fetch (most reliable)
+            message_data = webhook_data.get('message', {})
+            message_id = message_data.get('id')
             
-            # Try to extract image data from various possible formats
-            if media_data:
-                # Try direct data field first
-                if isinstance(media_data, dict) and 'data' in media_data:
-                    log_and_print("INFO", "Found image data in 'data' field")
-                    image_bytes = base64.b64decode(media_data['data'])
-                
-                # Try mimetype field next
-                elif isinstance(media_data, dict) and 'mimetype' in media_data and 'body' in media_data:
-                    log_and_print("INFO", "Found image data in 'body' field with mimetype")
-                    image_bytes = base64.b64decode(media_data['body'])
-                
-                # Try for Maytapi-specific format - file field
-                elif isinstance(media_data, dict) and 'file' in media_data:
-                    log_and_print("INFO", "Found image data in Maytapi 'file' field")
-                    if isinstance(media_data['file'], str):
-                        # Handle base64-encoded data
-                        if media_data['file'].startswith('data:'):
-                            # Extract base64 part after the comma
-                            base64_data = media_data['file'].split(',', 1)[1]
-                            image_bytes = base64.b64decode(base64_data)
-                        # Handle URL
-                        elif media_data['file'].startswith('http'):
-                            response = requests.get(media_data['file'])
-                            if response.status_code == 200:
-                                image_bytes = response.content
-                            else:
-                                log_and_print("ERROR", f"Failed to download image from URL: {response.status_code}")
-                
-                # Try media field from Maytapi webhook format
-                elif isinstance(media_data, dict) and isinstance(media_data.get('message'), dict):
-                    if 'media' in media_data['message']:
-                        log_and_print("INFO", "Found image in message.media field")
-                        media_url = media_data['message']['media']
-                        if isinstance(media_url, str) and media_url.startswith('http'):
-                            response = requests.get(media_url)
-                            if response.status_code == 200:
-                                image_bytes = response.content
-                            else:
-                                log_and_print("ERROR", f"Failed to download image from message.media URL: {response.status_code}")
+            if message_id:
+                log_and_print("INFO", f"Found message ID: {message_id}, attempting direct fetch")
+                image_bytes = self.maytapi_client.get_media_content(message_id)
+                if image_bytes:
+                    log_and_print("INFO", f"Successfully fetched image directly using message ID")
+                    return image_bytes
+                else:
+                    log_and_print("WARNING", "Direct message ID fetch failed, trying alternative methods")
             
-            return image_bytes
-        
+            # STRATEGY 2: Check for direct media URL in the message object
+            if isinstance(message_data, dict):
+                log_and_print("INFO", "Checking for media URL in message data")
+                
+                # Try standard media field
+                if 'media' in message_data and message_data['media']:
+                    media_url = message_data['media']
+                    log_and_print("INFO", f"Found media URL in message: {media_url[:50]}...")
+                    try:
+                        response = requests.get(media_url, timeout=10)
+                        if response.status_code == 200:
+                            log_and_print("INFO", f"Successfully downloaded image from media URL")
+                            return response.content
+                    except Exception as url_error:
+                        log_and_print("ERROR", f"Failed to download from media URL: {str(url_error)}")
+                
+                # Try different possible fields where media might be stored
+                for field in ['file', 'thumbnail', 'mediaUrl']:
+                    if field in message_data and message_data[field]:
+                        media_url = message_data[field]
+                        if isinstance(media_url, str) and (media_url.startswith('http') or media_url.startswith('data:')):
+                            log_and_print("INFO", f"Found alternative media URL in '{field}': {media_url[:50]}...")
+                            
+                            # Handle data URI format
+                            if media_url.startswith('data:'):
+                                try:
+                                    content_type, b64data = media_url.split(',', 1)
+                                    log_and_print("INFO", f"Extracting base64 data from data URI")
+                                    return base64.b64decode(b64data)
+                                except Exception as b64_error:
+                                    log_and_print("ERROR", f"Failed to decode data URI: {str(b64_error)}")
+                            
+                            # Handle HTTP URL format
+                            elif media_url.startswith('http'):
+                                try:
+                                    response = requests.get(media_url, timeout=10)
+                                    if response.status_code == 200:
+                                        log_and_print("INFO", f"Successfully downloaded image from {field} URL")
+                                        return response.content
+                                except Exception as url_error:
+                                    log_and_print("ERROR", f"Failed to download from {field} URL: {str(url_error)}")
+            
+            # STRATEGY 3: Look for body field with base64 data
+            if isinstance(message_data, dict) and 'body' in message_data and message_data['body']:
+                try:
+                    log_and_print("INFO", "Trying to decode base64 data from body field")
+                    body_data = message_data['body']
+                    if isinstance(body_data, str):
+                        # If it's base64 encoded
+                        if body_data.startswith('data:'):
+                            content_type, b64data = body_data.split(',', 1)
+                            return base64.b64decode(b64data)
+                        else:
+                            # Sometimes it's just base64 without the prefix
+                            try:
+                                return base64.b64decode(body_data)
+                            except:
+                                pass
+                except Exception as body_error:
+                    log_and_print("ERROR", f"Failed to extract image from body: {str(body_error)}")
+            
+            # STRATEGY 4: Search in the full webhook data for any field that might contain image data
+            log_and_print("INFO", "Searching all fields in webhook data for possible image data")
+            
+            def search_dict_for_image(data, path=""):
+                if not isinstance(data, dict):
+                    return None
+                
+                for key, value in data.items():
+                    current_path = f"{path}.{key}" if path else key
+                    
+                    # Check if this looks like a media URL
+                    if isinstance(value, str) and key in ['file', 'media', 'url', 'mediaUrl', 'thumbnail', 'image']:
+                        if value.startswith('http'):
+                            log_and_print("INFO", f"Found potential media URL in {current_path}: {value[:50]}...")
+                            try:
+                                response = requests.get(value, timeout=10)
+                                if response.status_code == 200 and response.content:
+                                    log_and_print("INFO", f"Successfully downloaded image from {current_path}")
+                                    return response.content
+                            except Exception as search_error:
+                                log_and_print("ERROR", f"Failed to download from {current_path}: {str(search_error)}")
+                        
+                        elif value.startswith('data:'):
+                            log_and_print("INFO", f"Found potential data URI in {current_path}")
+                            try:
+                                content_type, b64data = value.split(',', 1)
+                                image_data = base64.b64decode(b64data)
+                                if image_data:
+                                    log_and_print("INFO", f"Successfully decoded image from {current_path}")
+                                    return image_data
+                            except Exception as data_error:
+                                log_and_print("ERROR", f"Failed to decode from {current_path}: {str(data_error)}")
+                    
+                    # Recurse into nested dictionaries
+                    elif isinstance(value, dict):
+                        result = search_dict_for_image(value, current_path)
+                        if result:
+                            return result
+                    
+                    # Check lists too
+                    elif isinstance(value, list):
+                        for i, item in enumerate(value):
+                            if isinstance(item, dict):
+                                result = search_dict_for_image(item, f"{current_path}[{i}]")
+                                if result:
+                                    return result
+                
+                return None
+            
+            # Try deep search
+            image_data = search_dict_for_image(webhook_data)
+            if image_data:
+                return image_data
+            
+            # No image data found
+            log_and_print("ERROR", "Failed to extract image data using all available methods")
+            return None
+            
         except Exception as e:
-            log_and_print("ERROR", f"Error extracting image data: {str(e)}")
+            log_and_print("ERROR", f"Error in extract_image_from_maytapi: {str(e)}")
             traceback.print_exc()
             return None
     
-    @staticmethod
-    def create_placeholder_image() -> bytes:
+    def create_placeholder_image(self) -> bytes:
         """Create a simple placeholder image
         
         Returns:
@@ -928,7 +1071,7 @@ class MarketingBot:
             phone_id=maytapi_phone_id
         )
         self.session_manager = SessionManager()
-        self.image_handler = ImageHandler()
+        self.image_handler = ImageHandler(self.whatsapp_client)
         log_and_print("INFO", "MarketingBot initialized with all components")
     
     def process_request(self, user_id: str, from_number: str, product_image_path: str, product_details: Dict, product_type: str = "beverage") -> Dict:
@@ -1280,21 +1423,29 @@ class MarketingBot:
             else:
                 log_and_print("INFO", f"User {user_id} sent message in default state: '{text}'")
                 
-                # Check if we've already sent welcome message
-                if not session.get('welcomed', False):
-                    log_and_print("INFO", f"Sending initial welcome to user {user_id}")
+                # URGENT FIX: Check if this user is in the global welcomed list
+                # If not, welcome them and add them to the global list
+                if user_id not in welcomed_users:
+                    log_and_print("INFO", f"Sending first-time welcome to user {user_id}")
+                    
+                    # Add user to global welcomed registry
+                    welcomed_users.add(user_id)
+                    
+                    # Send welcome message
                     self.whatsapp_client.send_message(
                         from_number,
                         "👋 Welcome to Marketing Image Generator!\n\n"
                         "To create a marketing image, send 'edit' to start."
                     )
-                    # Mark this user as welcomed
+                    
+                    # Update session welcomed state 
                     self.session_manager.update_session(from_number, {
                         "welcomed": True
                     })
+                    log_and_print("INFO", f"User {user_id} added to global welcomed users list")
                 else:
-                    # For subsequent messages, just give a gentle reminder
-                    log_and_print("INFO", f"User {user_id} sent unrecognized text: {text}")
+                    # Very important: do NOT send the welcome message for users we've already welcomed
+                    log_and_print("INFO", f"User {user_id} is already welcomed, sending reminder message")
                     self.whatsapp_client.send_message(
                         from_number,
                         "To start creating a marketing image, please send 'edit'."
@@ -1313,18 +1464,15 @@ class MarketingBot:
             except Exception as send_error:
                 log_and_print("ERROR", f"Failed to send error message: {str(send_error)}")
     
-    def handle_image_message(self, from_number: str, media_data):
+    def handle_image_message(self, from_number: str, webhook_data: Dict):
         """Handle incoming image messages
         
         Args:
             from_number: User's WhatsApp number
-            media_data: Media data from WhatsApp
+            webhook_data: Complete webhook data
         """
         try:
             log_and_print("INFO", f"Image received from {from_number}. Processing...")
-            print(f"[DEBUG] Media data type: {type(media_data)}")
-            if isinstance(media_data, dict):
-                print(f"[DEBUG] Media data keys: {list(media_data.keys())}")
             
             # Only process private chats (not groups) and only if from_number is valid
             if not from_number or "@g.us" in from_number:
@@ -1348,10 +1496,11 @@ class MarketingBot:
                 )
                 return
             
-            # Process the image from media_data
+            # Process the image from webhook data
             try:
-                # Extract image bytes
-                image_bytes = self.image_handler.extract_image_from_whatsapp(media_data)
+                # IMPORTANT FIX: Extract image data directly from the webhook data
+                log_and_print("INFO", f"Extracting image data from webhook")
+                image_bytes = self.image_handler.extract_image_from_maytapi(webhook_data)
                 
                 # If we couldn't get image data, use a placeholder
                 if not image_bytes:
@@ -1438,7 +1587,7 @@ class MarketingBot:
             user_id = session["user_id"]
             
             # Check if we've already welcomed the user
-            if not session.get('welcomed', False):
+            if user_id not in welcomed_users:
                 # Send welcome and mark as welcomed
                 self.whatsapp_client.send_message(
                     from_number,
@@ -1446,6 +1595,8 @@ class MarketingBot:
                     "I received your voice message, but I work better with text.\n\n"
                     "To create a marketing image, send 'edit' to start."
                 )
+                # Add user to global welcomed registry
+                welcomed_users.add(user_id)
                 self.session_manager.update_session(from_number, {
                     "welcomed": True
                 })
@@ -1500,7 +1651,8 @@ def health():
         "timestamp": datetime.now().isoformat(),
         "openai": OPENAI_API_KEY is not None,
         "maytapi": all([MAYTAPI_API_TOKEN, MAYTAPI_PRODUCT_ID, MAYTAPI_PHONE_ID]),
-        "user_sessions": len(marketing_bot.session_manager.sessions)
+        "user_sessions": len(marketing_bot.session_manager.sessions),
+        "welcomed_users": len(welcomed_users)
     })
 
 @app.route('/images/<path:path>')
@@ -1517,7 +1669,7 @@ def webhook():
         # Extract the webhook data
         webhook_data = request.json
         log_and_print("INFO", f"Received webhook data of type: {type(webhook_data)}")
-        print(f"[DEBUG] Webhook data: {json.dumps(webhook_data)[:500]}...")
+        print(f"[DEBUG] Webhook data keys: {list(webhook_data.keys()) if isinstance(webhook_data, dict) else 'Not a dict'}")
         
         # Check if we have a valid message structure
         if not webhook_data or not isinstance(webhook_data, dict):
@@ -1576,7 +1728,8 @@ def webhook():
         # Handle media messages (images)
         if content_type == 'image':
             log_and_print("INFO", f"Detected image message from {from_number}")
-            marketing_bot.handle_image_message(from_number, message_data)
+            # URGENT FIX: Pass full webhook data to handle_image_message
+            marketing_bot.handle_image_message(from_number, webhook_data)
             return jsonify({"status": "success", "message": "Image processed"})
         
         # Handle audio messages
@@ -1592,7 +1745,8 @@ def webhook():
             mime_type = message_data.get('mimetype', '')
             if mime_type and mime_type.startswith('image/'):
                 log_and_print("INFO", f"Document is an image, processing as image")
-                marketing_bot.handle_image_message(from_number, message_data)
+                # URGENT FIX: Pass full webhook data to handle_image_message
+                marketing_bot.handle_image_message(from_number, webhook_data)
             else:
                 log_and_print("INFO", f"Document is not an image, sending reminder")
                 marketing_bot.handle_audio_message(from_number)  # Reuse audio handler for generic response
@@ -1653,6 +1807,23 @@ def cleanup_sessions():
     except Exception as e:
         log_and_print("ERROR", f"Maintenance cleanup error: {str(e)}")
         traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/maintenance/reset', methods=['POST'])
+def reset_welcomed_users():
+    """Reset the welcomed users registry for testing"""
+    try:
+        before_count = len(welcomed_users)
+        welcomed_users.clear()
+        log_and_print("INFO", f"Reset welcomed users registry. Before: {before_count}, After: {len(welcomed_users)}")
+        
+        return jsonify({
+            "status": "success",
+            "before_count": before_count,
+            "after_count": len(welcomed_users)
+        })
+    except Exception as e:
+        log_and_print("ERROR", f"Reset welcomed users error: {str(e)}")
         return jsonify({"status": "error", "message": str(e)})
 
 ###################
