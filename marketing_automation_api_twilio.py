@@ -2081,4 +2081,257 @@ def home():
         "endpoint": "/webhook"
     })
 
-@
+@app.route('/health')
+def health():
+    """Health check endpoint for Railway"""
+    log_and_print("DEBUG", "Health check accessed")
+    return jsonify({
+        "status": "healthy", 
+        "timestamp": datetime.now().isoformat(),
+        "openai": OPENAI_API_KEY is not None,
+        "maytapi": all([MAYTAPI_API_TOKEN, MAYTAPI_PRODUCT_ID, MAYTAPI_PHONE_ID]),
+        "user_sessions": len(marketing_bot.session_manager.sessions),
+        "welcomed_users": len(marketing_bot.session_manager.welcomed_users)
+    })
+
+@app.route('/images/<path:path>')
+def serve_images(path):
+    """Serve images from the images directory"""
+    log_and_print("DEBUG", f"Serving image: {path}")
+    directory, filename = os.path.split(path)
+    return send_from_directory(os.path.join('images', directory), filename)
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Handle incoming WhatsApp messages via Maytapi webhook"""
+    try:
+        # Extract the webhook data
+        webhook_data = request.json
+        log_and_print("INFO", f"Received webhook data of type: {type(webhook_data)}")
+        print(f"[DEBUG] Webhook data keys: {list(webhook_data.keys()) if isinstance(webhook_data, dict) else 'Not a dict'}")
+        
+        # Check if we have a valid message structure
+        if not webhook_data or not isinstance(webhook_data, dict):
+            log_and_print("ERROR", "Invalid webhook data format")
+            return jsonify({"status": "error", "message": "Invalid webhook data format"})
+        
+        # Extract message type and phone number
+        message_type = webhook_data.get('type', '')
+        if message_type != 'message':
+            log_and_print("INFO", f"Ignoring non-message event: {message_type}")
+            return jsonify({"status": "success", "message": "Non-message event ignored"})
+        
+        # Extract user and message data
+        user_data = webhook_data.get('user', {})
+        message_data = webhook_data.get('message', {})
+        
+        # Extract sender info
+        from_number = user_data.get('id', '')  # Format: 1234567890@c.us
+        phone_number = user_data.get('phone', '')  # Format: 1234567890
+        
+        # Use phone number if id is not available
+        if not from_number and phone_number:
+            from_number = f"{phone_number}@c.us"
+        
+        if not from_number:
+            log_and_print("ERROR", "No sender phone number in webhook data")
+            return jsonify({"status": "error", "message": "No sender phone number"})
+        
+        # Check if message is from the bot itself
+        is_from_me = message_data.get('fromMe', False)
+        if is_from_me:
+            log_and_print("INFO", "Ignoring message from the bot itself")
+            return jsonify({"status": "success", "message": "Bot message ignored"})
+        
+        # Extract message ID to prevent duplicate processing
+        message_id = message_data.get('id', '')
+        
+        # Skip if we've already processed this message
+        if message_id and message_id in processed_messages:
+            log_and_print("INFO", f"Skipping duplicate message: {message_id}")
+            return jsonify({"status": "success", "message": "Duplicate message skipped"})
+        
+        # Mark as processed if it has an ID
+        if message_id:
+            processed_messages[message_id] = datetime.now().timestamp()
+            
+            # Limit cache size by removing old entries (keep last 100)
+            if len(processed_messages) > 100:
+                oldest = sorted(processed_messages.items(), key=lambda x: x[1])[0][0]
+                processed_messages.pop(oldest)
+        
+        # Extract message content
+        content_type = message_data.get('type', '')
+        log_and_print("INFO", f"Message content type: {content_type}")
+        
+        # Handle media messages (images)
+        if content_type == 'image':
+            log_and_print("INFO", f"Detected image message from {from_number}")
+            # Log additional message data for debugging
+            log_and_print("DEBUG", f"Message data: {json.dumps(message_data, indent=2)}")
+            
+            # Check for direct media URL
+            if 'media' in message_data:
+                log_and_print("INFO", f"Found media URL in message: {message_data['media'][:50]}...")
+            
+            # Pass full webhook data to handle_image_message
+            marketing_bot.handle_image_message(from_number, webhook_data)
+            return jsonify({"status": "success", "message": "Image processed"})
+        
+        # Handle audio messages
+        elif content_type in ['audio', 'voice', 'ptt']:
+            log_and_print("INFO", f"Detected audio message from {from_number}")
+            marketing_bot.handle_audio_message(from_number)
+            return jsonify({"status": "success", "message": "Audio processed"})
+        
+        # Handle document messages that might be images
+        elif content_type == 'document':
+            log_and_print("INFO", f"Detected document message from {from_number}")
+            # Check if it's an image document
+            mime_type = message_data.get('mimetype', '')
+            if mime_type and mime_type.startswith('image/'):
+                log_and_print("INFO", f"Document is an image, processing as image")
+                marketing_bot.handle_image_message(from_number, webhook_data)
+            else:
+                log_and_print("INFO", f"Document is not an image, sending reminder")
+                marketing_bot.handle_audio_message(from_number)  # Reuse audio handler for generic response
+            return jsonify({"status": "success", "message": "Document processed"})
+        
+        # Handle text messages
+        elif content_type == 'text':
+            body = message_data.get('text', '')
+            log_and_print("INFO", f"Detected text message from {from_number}: {body}")
+            marketing_bot.handle_text_message(from_number, body)
+            return jsonify({"status": "success", "message": "Text processed"})
+        
+        # Fallback for other message types
+        else:
+            log_and_print("WARNING", f"Unhandled message type: {content_type}")
+            # Send a generic response for unhandled types
+            marketing_bot.handle_audio_message(from_number)  # Reuse audio handler for generic response
+            return jsonify({"status": "success", "message": f"Unhandled message type: {content_type}"})
+    
+    except Exception as e:
+        log_and_print("ERROR", f"Webhook error: {str(e)}")
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)})
+
+###################
+# MAINTENANCE TASKS
+###################
+
+@app.route('/maintenance/cleanup', methods=['POST'])
+def cleanup_sessions():
+    """Cleanup old sessions and processed messages"""
+    try:
+        # Get cleanup hours from request or use default
+        hours = request.json.get('hours', 24) if request.is_json else 24
+        
+        # Clean up old sessions
+        session_count = marketing_bot.session_manager.clean_old_sessions(hours)
+        
+        # Clean up old processed messages
+        current_time = datetime.now().timestamp()
+        message_ids = list(processed_messages.keys())
+        message_count = 0
+        
+        for msg_id in message_ids:
+            if current_time - processed_messages[msg_id] > hours * 3600:
+                processed_messages.pop(msg_id)
+                message_count += 1
+        
+        log_and_print("INFO", f"Cleaned up {session_count} sessions and {message_count} processed messages older than {hours} hours")
+        
+        return jsonify({
+            "status": "success",
+            "cleaned_sessions": session_count,
+            "cleaned_messages": message_count,
+            "hours": hours
+        })
+    
+    except Exception as e:
+        log_and_print("ERROR", f"Maintenance cleanup error: {str(e)}")
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/maintenance/reset', methods=['POST'])
+def reset_welcomed_users():
+    """Reset the welcomed users registry for testing"""
+    try:
+        before_count = len(marketing_bot.session_manager.welcomed_users)
+        marketing_bot.session_manager.welcomed_users.clear()
+        log_and_print("INFO", f"Reset welcomed users registry. Before: {before_count}, After: {len(marketing_bot.session_manager.welcomed_users)}")
+        
+        return jsonify({
+            "status": "success",
+            "before_count": before_count,
+            "after_count": len(marketing_bot.session_manager.welcomed_users)
+        })
+    except Exception as e:
+        log_and_print("ERROR", f"Reset welcomed users error: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/maintenance/sessions', methods=['GET'])
+def view_sessions():
+    """View active sessions (for debugging only)"""
+    try:
+        sessions = marketing_bot.session_manager.get_all_sessions()
+        sanitized_sessions = {}
+        
+        # Remove sensitive data for display
+        for user_id, session in sessions.items():
+            sanitized_session = {
+                "user_id": user_id,
+                "state": session.get("state"),
+                "has_image": bool(session.get("product_image")),
+                "details_count": len(session.get("details", {})),
+                "welcomed": session.get("welcomed", False),
+                "last_active": session.get("last_active")
+            }
+            sanitized_sessions[user_id] = sanitized_session
+        
+        return jsonify({
+            "status": "success",
+            "active_sessions": len(sanitized_sessions),
+            "welcomed_users": len(marketing_bot.session_manager.welcomed_users),
+            "sessions": sanitized_sessions
+        })
+    except Exception as e:
+        log_and_print("ERROR", f"View sessions error: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)})
+
+###################
+# MAIN APPLICATION
+###################
+
+if __name__ == '__main__':
+    # Get port from environment variable (Railway provides this)
+    port = int(os.getenv('PORT', 5000))
+    
+    # Print environment info for debugging
+    print("-" * 50)
+    print("MARKETING BOT STARTUP")
+    print("-" * 50)
+    print(f"Python version: {os.sys.version}")
+    print(f"Working directory: {os.getcwd()}")
+    print(f"Environment variables: PORT={port}")
+    print(f"OpenAI API Key Present: {'Yes' if OPENAI_API_KEY else 'No'}")
+    print(f"Maytapi API Token Present: {'Yes' if MAYTAPI_API_TOKEN else 'No'}")
+    print(f"Maytapi Product ID: {MAYTAPI_PRODUCT_ID}")
+    print(f"Maytapi Phone ID: {MAYTAPI_PHONE_ID}")
+    print(f"Checking directories...")
+    
+    # Make sure directories exist and are writable
+    for directory in ['images', 'images/input', 'images/output']:
+        os.makedirs(directory, exist_ok=True)
+        print(f"Directory '{directory}' exists: {os.path.exists(directory)}")
+    
+    # Test PIL import
+    print(f"PIL/Pillow version: {Image.__version__ if hasattr(Image, '__version__') else 'unknown'}")
+    
+    # Log startup
+    log_and_print("INFO", f"Starting Marketing Bot API (WhatsApp Version) on port {port}")
+    print("-" * 50)
+    
+    # Run the Flask app
+    app.run(host='0.0.0.0', port=port, debug=False)  # Set debug=False for production
