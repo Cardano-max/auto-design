@@ -510,8 +510,29 @@ class MaytapiClient:
                 log_and_print("ERROR", f"Message is not a media type: {message_type}")
                 return None
                 
-            # Check for direct media URL
-            media_url = message.get('media', '')
+            # Check for media URL in different possible locations
+            media_url = None
+            
+            # Try direct media field first
+            if 'media' in message:
+                media_url = message['media']
+                log_and_print("INFO", f"Found media URL in message.media: {media_url[:50]}...")
+            
+            # Try message.url field (which seems to be used in some cases)
+            elif 'url' in message:
+                media_url = message['url']
+                log_and_print("INFO", f"Found media URL in message.url: {media_url[:50]}...")
+            
+            # Try body field for base64 data
+            elif 'body' in message and isinstance(message['body'], str) and message['body'].startswith('data:'):
+                try:
+                    # Extract base64 data from data URL
+                    base64_data = message['body'].split(',')[1]
+                    return base64.b64decode(base64_data)
+                except Exception as e:
+                    log_and_print("ERROR", f"Failed to decode base64 data: {str(e)}")
+                    return None
+            
             if not media_url:
                 log_and_print("ERROR", "No media URL found in message")
                 return None
@@ -528,7 +549,13 @@ class MaytapiClient:
                 )
                 
                 if response.status_code == 200:
-                    return response.content
+                    # Verify it's actually image data
+                    try:
+                        Image.open(BytesIO(response.content))
+                        return response.content
+                    except Exception as img_err:
+                        log_and_print("ERROR", f"Downloaded data is not a valid image: {str(img_err)}")
+                        return None
                 else:
                     log_and_print("ERROR", f"Failed to fetch media: HTTP {response.status_code}")
                     return None
