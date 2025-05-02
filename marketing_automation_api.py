@@ -208,7 +208,9 @@ class ImageGenerator:
         try:
             start_time = time.time()
             product_name = product_details.get('product_name', 'product')
-            logger = self.logger if hasattr(self, "logger") else print
+            
+            # Use global logger instead of self.logger
+            log_and_print("INFO", f"Generating marketing image for {product_name}")
             
             # 1. Build the prompt
             if product_type.lower() == "beverage":
@@ -217,11 +219,11 @@ class ImageGenerator:
                 prompt = PromptTemplates.get_food_template(product_details)
             else:
                 prompt = PromptTemplates.get_master_template(product_details)
-            logger.info(f"Prompt for image generation: {prompt[:100]}...")
+            log_and_print("INFO", f"Prompt for image generation: {prompt[:100]}...")
 
             # 2. Ensure images are PNG and not too large
             if not os.path.exists(product_image_path):
-                logger.error(f"Product image not found at path: {product_image_path}")
+                log_and_print("ERROR", f"Product image not found at path: {product_image_path}")
                 return None
 
             # Process product image
@@ -230,7 +232,7 @@ class ImageGenerator:
                     converted_path = f"{os.path.splitext(product_image_path)[0]}_converted.png"
                     img.save(converted_path, format="PNG")
                     product_image_path = converted_path
-                    logger.info(f"Product image converted to PNG: {product_image_path}")
+                    log_and_print("INFO", f"Product image converted to PNG: {product_image_path}")
 
                 file_size = os.path.getsize(product_image_path)
                 if file_size > 10 * 1024 * 1024:  # 10MB limit
@@ -241,7 +243,7 @@ class ImageGenerator:
                     resized_path = f"{os.path.splitext(product_image_path)[0]}_resized.png"
                     img.save(resized_path, format="PNG", optimize=True)
                     product_image_path = resized_path
-                    logger.info(f"Product image resized to {new_width}x{new_height}")
+                    log_and_print("INFO", f"Product image resized to {new_width}x{new_height}")
 
             # Process logo image if provided
             if logo_image_path and os.path.exists(logo_image_path):
@@ -250,7 +252,7 @@ class ImageGenerator:
                         converted_path = f"{os.path.splitext(logo_image_path)[0]}_converted.png"
                         logo_img.save(converted_path, format="PNG")
                         logo_image_path = converted_path
-                        logger.info(f"Logo image converted to PNG: {logo_image_path}")
+                        log_and_print("INFO", f"Logo image converted to PNG: {logo_image_path}")
 
                     file_size = os.path.getsize(logo_image_path)
                     if file_size > 10 * 1024 * 1024:  # 10MB limit
@@ -261,10 +263,10 @@ class ImageGenerator:
                         resized_path = f"{os.path.splitext(logo_image_path)[0]}_resized.png"
                         logo_img.save(resized_path, format="PNG", optimize=True)
                         logo_image_path = resized_path
-                        logger.info(f"Logo image resized to {new_width}x{new_height}")
+                        log_and_print("INFO", f"Logo image resized to {new_width}x{new_height}")
 
             # 3. Prepare API call
-            logger.info("Sending image edit request to OpenAI API (gpt-image-1)")
+            log_and_print("INFO", "Sending image edit request to OpenAI API (gpt-image-1)")
             max_retries = 3
             retry_delay = 2
             result = None
@@ -324,19 +326,19 @@ class ImageGenerator:
                                 except:
                                     pass
                             else:
-                                logger.error("Failed to generate mask")
+                                log_and_print("ERROR", "Failed to generate mask")
                                 return None
                     
-                    logger.info("API call successful")
+                    log_and_print("INFO", "API call successful")
                     break
                 except Exception as retry_error:
-                    logger.warning(f"API call attempt {retry+1} failed: {str(retry_error)}")
+                    log_and_print("WARNING", f"API call attempt {retry+1} failed: {str(retry_error)}")
                     if retry < max_retries - 1:
-                        logger.info(f"Retrying in {retry_delay} seconds...")
+                        log_and_print("INFO", f"Retrying in {retry_delay} seconds...")
                         time.sleep(retry_delay)
                         retry_delay *= 2
                     else:
-                        logger.error("All API call retries failed")
+                        log_and_print("ERROR", "All API call retries failed")
                         return None
 
             # 4. Process the result
@@ -344,7 +346,7 @@ class ImageGenerator:
                 b64_data = result.data[0].b64_json
                 image_bytes = base64.b64decode(b64_data)
             else:
-                logger.error("No image data in response")
+                log_and_print("ERROR", "No image data in response")
                 return None
                 
             # 5. Save the image
@@ -355,16 +357,15 @@ class ImageGenerator:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             with open(output_path, 'wb') as f:
                 f.write(image_bytes)
-            logger.info(f"Marketing image saved to {output_path}")
+            log_and_print("INFO", f"Marketing image saved to {output_path}")
 
             processing_time = time.time() - start_time
-            logger.info(f"Total processing time: {processing_time:.2f} seconds")
+            log_and_print("INFO", f"Total processing time: {processing_time:.2f} seconds")
             return output_path
                 
         except Exception as e:
-            logger.error(f"Error generating marketing image: {str(e)}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            log_and_print("ERROR", f"Error generating marketing image: {str(e)}")
+            log_and_print("ERROR", f"Traceback: {traceback.format_exc()}")
             return None
 
 ###################
