@@ -4,6 +4,7 @@ Marketing Image Generator - WaAPI WhatsApp Version
 --------------------------------------------
 Production version with WaAPI WhatsApp API integration
 Configured for Railway.com deployment
+Updated for GPT-Image-1 model implementation
 """
 
 import os
@@ -11,10 +12,9 @@ import base64
 import json
 import logging
 import time
-import math
 import traceback
 from datetime import datetime
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Union
 from PIL import Image
 from io import BytesIO
 from flask import Flask, request, jsonify, send_from_directory
@@ -40,12 +40,31 @@ def debug_print(message):
     timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
     print(f"[DEBUG][{timestamp}] {message}")
 
+# Utility function to log and print messages
+def log_and_print(level, message):
+    """Log and print messages with standardized format"""
+    timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+    print(f"[{level}][{timestamp}] {message}")
+    
+    if level == "DEBUG":
+        logger.debug(message)
+    elif level == "INFO":
+        logger.info(message)
+    elif level == "WARNING":
+        logger.warning(message)
+    elif level == "ERROR":
+        logger.error(message)
+    elif level == "CRITICAL":
+        logger.critical(message)
+
 # Create Flask app
 app = Flask(__name__, static_folder='static', template_folder='templates')
 
 # Create directories for storing images
 os.makedirs('images/input', exist_ok=True)
 os.makedirs('images/output', exist_ok=True)
+os.makedirs('images/masks', exist_ok=True)
+os.makedirs('images/logos', exist_ok=True)
 
 # Store user sessions
 user_sessions = {}
@@ -96,98 +115,92 @@ class PromptTemplates:
     def get_master_template(product_details: Dict) -> str:
         """Generate the master prompt template with product details"""
         logger.debug(f"Generating master template with product details: {product_details}")
-        return f"""Create a professional marketing poster for {product_details.get('product_name', 'this product')} that looks like it was designed by a world-class graphic designer:
+        return f"""Create a professional marketing poster for this product.
 
-1. VISUAL HIERARCHY & LAYOUT:
-   - Remove the original background completely with clean edges
-   - Place product as hero element in center with natural drop shadow (3D effect)
-   - Company name "{product_details.get('company_name', '')}" at top, using elegant sans-serif font (20% of poster height)
-   - Product name "{product_details.get('product_name', '')}" below product in bold typography (15% of poster height)
-   - Price "{product_details.get('price', '')}" in eye-catching circular badge at bottom right (10% of poster height), using high-contrast color
-   - Tagline "{product_details.get('tagline', '')}" positioned between company name and product image in italic font
-   - Address/location "{product_details.get('address', '')}" at bottom in small, readable font
+PRESERVE THE PRODUCT: Keep the product image as the central focus, but remove its background and place it on a new background.
 
-2. COLOR & AESTHETICS:
-   - Use complementary color scheme matching product colors
-   - Apply subtle gradient background with light-to-dark flow
-   - Create visual depth with layering and micro-shadows
-   - Ensure text has perfect contrast against background for readability
-   - Apply 80-20 rule: 80% negative space, 20% content
+ADD THESE MARKETING ELEMENTS:
+- Company name: "{product_details.get('company_name', '')}" - place at top of poster
+- Product name: "{product_details.get('product_name', '')}" - place below the product 
+- Price: "{product_details.get('price', '')}" - place in an eye-catching circle in bottom right
+- Tagline: "{product_details.get('tagline', '')}" - place between company name and product
+- Address: "{product_details.get('address', '')}" - place at bottom in smaller text
 
-3. PROFESSIONAL TOUCHES:
-   - Include subtle brand pattern in background
-   - Apply deliberate typography hierarchy (3 font sizes maximum)
-   - Add minimal design accents that relate to the product type
-   - Enhance product appearance with realistic lighting
-   - Create balanced composition using rule of thirds
+DESIGN STYLE:
+- Use a clean, modern marketing layout 
+- Add a subtle gradient background that complements the product colors
+- Use professional typography with clear hierarchy
+- Ensure all text is perfectly readable
+- Make it look like a high-end advertising poster created by a professional graphic designer
 
-The final design should have magazine-quality polish with perfect balance, spacing and professional marketing appeal.
+The final image should look like it was designed by a professional marketing agency.
 """
 
     @staticmethod
     def get_beverage_template(product_details: Dict) -> str:
         """Generate beverage-specific prompt template"""
         logger.debug(f"Generating beverage template with product details: {product_details}")
-        return f"""Create a premium beverage marketing poster for {product_details.get('product_name', 'this drink')} that would impress professional graphic designers:
+        return f"""Create a premium café/beverage marketing poster.
 
-1. BEVERAGE PRESENTATION (FOCAL POINT):
-   - Remove original background completely with pixel-perfect edges
-   - Center the beverage cup/glass with proper perspective
-   - Enhance liquid color for vibrant, appetizing appearance
-   - Add realistic condensation droplets for cold drinks OR delicate steam wisps for hot drinks
-   - Highlight garnishes, toppings, and texture details
-   - Create subtle reflection beneath container on a glossy surface
+PRESERVE THE BEVERAGE: Keep the drink as the central focus, removing its background. Enhance the appearance to make it look appetizing.
 
-2. BRANDING HIERARCHY:
-   - Company name "{product_details.get('company_name', '')}" at top, using elegant script font (15-20% of poster height)
-   - Product name "{product_details.get('product_name', '')}" in bold modern typography below product (15% of poster height)
-   - Price "{product_details.get('price', '')}" in circular price badge (bottom right) using brand color with high contrast
-   - Tagline "{product_details.get('tagline', '')}" in italic serif font between company name and product
-   - Location "{product_details.get('address', '')}" at bottom in smaller condensed font
+ADD THESE MARKETING ELEMENTS:
+- Company name: "{product_details.get('company_name', '')}" - place at top in elegant script font
+- Product name: "{product_details.get('product_name', '')}" - place below the beverage
+- Price: "{product_details.get('price', '')}" - place in an eye-catching circle in bottom right
+- Tagline: "{product_details.get('tagline', '')}" - place between company name and product
+- Address: "{product_details.get('address', '')}" - place at bottom in smaller text
 
-3. CAFÉ AESTHETIC:
-   - Create warm, inviting color palette complementing the drink's color
-   - Add subtle coffee beans/ingredients floating in soft focus background
-   - Apply gentle vignette focusing attention on beverage
-   - Include delicate line accents suggesting movement/aroma
-   - Balance white space (60%) with content (40%)
-   - Add minimal texture overlay for artisanal feel
+DESIGN STYLE:
+- Warm, inviting color palette that complements the drink
+- Add subtle background elements like coffee beans or ingredients
+- Use professional café marketing aesthetics similar to premium coffee shops
+- Create a gentle vignette effect to focus attention on the drink
+- Ensure all text is perfectly readable with good contrast
 
-STYLE REFERENCE: Premium coffee shop or high-end beverage brand marketing with artisanal crafted feel.
+The final image should look like a professional café marketing poster.
 """
 
     @staticmethod
     def get_food_template(product_details: Dict) -> str:
         """Generate food-specific prompt template"""
         logger.debug(f"Generating food template with product details: {product_details}")
-        return f"""Create a mouth-watering professional food marketing poster for {product_details.get('product_name', 'this food item')} with these expert specifications:
+        return f"""Create a mouth-watering professional food marketing poster.
 
-1. FOOD PRESENTATION (HERO ELEMENT):
-   - Remove background completely with clean, natural edges
-   - Position food as central focal point at perfect angle to showcase texture
-   - Enhance food colors by 15% for appetite appeal (golden browns, vibrant greens, rich reds)
-   - Add subtle steam effects for hot items OR fresh dewdrops for cold items
-   - Emphasize texture details: crispiness, juiciness, creaminess
-   - Apply professional food styling techniques (glistening surfaces, perfect arrangement)
-   - Create soft shadow beneath food for dimensional effect
+PRESERVE THE FOOD ITEM: Keep the food as the central focus, removing its background. Enhance its appearance to make it look delicious.
 
-2. BRANDING STRUCTURE:
-   - Company name "{product_details.get('company_name', '')}" at top in clean, bold sans-serif (18% of poster height)
-   - Product name "{product_details.get('product_name', '')}" below food in large typography (15% of poster height)
-   - Price "{product_details.get('price', '')}" in attention-grabbing callout shape bottom right (12% of poster height)
-   - Tagline "{product_details.get('tagline', '')}" emphasizing flavor/freshness between company name and food
-   - Location "{product_details.get('address', '')}" at bottom in refined, smaller typography
+ADD THESE MARKETING ELEMENTS:
+- Company name: "{product_details.get('company_name', '')}" - place at top in clean font
+- Product name: "{product_details.get('product_name', '')}" - place below the food in bold font
+- Price: "{product_details.get('price', '')}" - place in an eye-catching badge
+- Tagline: "{product_details.get('tagline', '')}" - place between company name and food
+- Address: "{product_details.get('address', '')}" - place at bottom in smaller text
 
-3. CULINARY AESTHETICS:
-   - Use complementary color palette based on food's dominant colors
-   - Add subtle ingredient illustrations in soft focus background
-   - Create depth with layered design elements
-   - Apply 70-30 negative space ratio for premium feel
-   - Include minimal chef's elements (e.g., fork illustration, plate decorations)
-   - Add delicate texture overlay suggesting quality and craftsmanship
+DESIGN STYLE:
+- Use colors that complement the food and stimulate appetite
+- Add subtle food-related elements in the background
+- Professional food photography style with perfect presentation
+- Create a balanced composition with the food as the hero
+- Ensure all text is clear and readable
 
-STYLE REFERENCE: High-end restaurant or premium food brand marketing with professional food photography aesthetics.
+The final image should look like a professional restaurant or food marketing poster.
 """
+
+    @staticmethod
+    def get_mask_generation_prompt(product_type: str) -> str:
+        """Generate a prompt for creating a mask for the product"""
+        logger.debug(f"Generating mask prompt for product type: {product_type}")
+        
+        base_prompt = "Generate a precise mask image to isolate the main product in the picture. "
+        
+        if product_type.lower() == "beverage":
+            specific_prompt = "Create a mask where the beverage container and all its contents are WHITE and everything else is BLACK. Include all parts of the beverage - the cup/glass, liquid, toppings, straws, and garnishes."
+        elif product_type.lower() == "food":
+            specific_prompt = "Create a mask where the food item and all its components are WHITE and everything else is BLACK. Include the plate/container if it's part of the presentation."
+        else:
+            specific_prompt = "Create a mask where the main product is WHITE and everything else is BLACK. Be precise with the product edges."
+        
+        return f"{base_prompt}{specific_prompt} This mask will be used to preserve only the product while changing the background. The mask should be the same size as the input image."
 
 ###################
 # IMAGE GENERATION
@@ -195,321 +208,351 @@ STYLE REFERENCE: High-end restaurant or premium food brand marketing with profes
 
 class ImageGenerator:
     def __init__(self, api_key: str):
-        print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Initializing ImageGenerator with API key: {api_key[:5]}...")
-        logger.info("Initializing ImageGenerator")
+        log_and_print("INFO", f"Initializing ImageGenerator with API key: {api_key[:5]}...")
         self.api_key = api_key
         self.client = openai_client
-        print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] OpenAI client initialized successfully")
-        logger.info(f"ImageGenerator initialized with OpenAI API - gpt-image-1 model only")
+        log_and_print("INFO", "ImageGenerator initialized with OpenAI API - gpt-image-1 model")
     
     def _encode_image(self, image_path: str) -> str:
-        """Encode image to base64 for API requests"""
-        try:
-            with open(image_path, "rb") as image_file:
-                return base64.b64encode(image_file.read()).decode('utf-8')
-        except Exception as e:
-            logger.error(f"Error encoding image: {str(e)}")
-            return None
+        """Encode image as base64 string"""
+        with open(image_path, "rb") as img_file:
+            return base64.b64encode(img_file.read()).decode('utf-8')
     
-    def enhance_prompt_with_vision(self, product_image_path: str, prompt: str) -> str:
-        """Enhance prompt by analyzing the image with Vision API"""
+    def generate_mask(self, product_image_path: str, product_type: str = "generic") -> Optional[str]:
+        """Generate a mask for the product image"""
         try:
-            # First use GPT-4 Vision to analyze the image
-            logger.info("Using GPT-4 Vision to analyze product image")
+            log_and_print("INFO", f"Generating mask for image at {product_image_path}")
             
-            # Encode the image
-            base64_image = self._encode_image(product_image_path)
-            if not base64_image:
-                logger.error("Failed to encode image for Vision API")
-                return prompt
+            # Verify image exists
+            if not os.path.exists(product_image_path):
+                log_and_print("ERROR", f"Product image not found at path: {product_image_path}")
+                return None
             
-            # Analyze the image
-            vision_prompt = f"Analyze this product image. Describe its key features, colors, and visual elements that should be preserved in a marketing poster. Keep your description under 100 words."
+            # Get mask generation prompt
+            prompt = PromptTemplates.get_mask_generation_prompt(product_type)
+            log_and_print("INFO", f"Using mask prompt: {prompt}")
             
-            vision_response = self.client.chat.completions.create(
-                model="gpt-4-vision-preview",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": vision_prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{base64_image}"
-                                }
-                            }
-                        ]
-                    }
-                ],
-                max_tokens=300
-            )
+            # Prepare the image for the API
+            with open(product_image_path, "rb") as img_file:
+                # Generate the mask using GPT-Image-1
+                max_retries = 3
+                retry_delay = 2
+                
+                for retry in range(max_retries):
+                    try:
+                        log_and_print("INFO", f"Mask generation API call attempt {retry+1}")
+                        
+                        # Make the API call for mask generation
+                        result = self.client.images.edit(
+                            model="gpt-image-1",
+                            image=img_file,
+                            prompt=prompt,
+                            size="1024x1024",
+                            response_format="b64_json"
+                        )
+                        
+                        log_and_print("INFO", "Mask generation API call successful")
+                        break
+                    except Exception as api_error:
+                        log_and_print("WARNING", f"Mask generation API call attempt {retry+1} failed: {str(api_error)}")
+                        
+                        if retry < max_retries - 1:
+                            log_and_print("INFO", f"Retrying in {retry_delay} seconds...")
+                            time.sleep(retry_delay)
+                            retry_delay *= 2
+                        else:
+                            log_and_print("ERROR", "All mask generation API call retries failed")
+                            return None
             
-            # Extract the analysis
-            product_analysis = vision_response.choices[0].message.content
-            logger.info(f"Vision analysis: {product_analysis[:100]}...")
-            
-            # Combine the analysis with the prompt
-            enhanced_prompt = f"{prompt}\n\nPRODUCT ANALYSIS: {product_analysis}"
-            return enhanced_prompt
-            
-        except Exception as e:
-            logger.error(f"Error enhancing prompt with vision: {str(e)}")
-            return prompt  # Return original prompt if analysis fails
-    
-    def prepare_image(self, image_path: str) -> str:
-        """Prepare image for API by verifying format and size"""
-        try:
-            if not os.path.exists(image_path):
-                logger.error(f"Image not found: {image_path}")
+            # Process the result
+            if hasattr(result, 'data') and len(result.data) > 0 and hasattr(result.data[0], 'b64_json'):
+                log_and_print("INFO", "Mask image data received")
+                
+                # Decode the base64 mask image
+                b64_data = result.data[0].b64_json
+                image_bytes = base64.b64decode(b64_data)
+                
+                # Save the mask
+                timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+                mask_filename = f"mask_{os.path.basename(product_image_path).split('.')[0]}_{timestamp}.png"
+                mask_path = os.path.join("images/masks", mask_filename)
+                
+                # Ensure masks directory exists
+                os.makedirs("images/masks", exist_ok=True)
+                
+                # Save mask image
+                with open(mask_path, "wb") as f:
+                    f.write(image_bytes)
+                
+                log_and_print("INFO", f"Mask saved to {mask_path}")
+                
+                # Convert the mask to have an alpha channel
+                try:
+                    # Load as grayscale image
+                    mask = Image.open(mask_path).convert("L")
+                    
+                    # Convert to RGBA
+                    mask_rgba = mask.convert("RGBA")
+                    
+                    # Use the mask itself to fill alpha channel
+                    mask_rgba.putalpha(mask)
+                    
+                    # Save with alpha channel
+                    alpha_mask_path = f"{os.path.splitext(mask_path)[0]}_alpha.png"
+                    mask_rgba.save(alpha_mask_path, format="PNG")
+                    
+                    log_and_print("INFO", f"Mask with alpha channel saved to {alpha_mask_path}")
+                    return alpha_mask_path
+                    
+                except Exception as mask_error:
+                    log_and_print("ERROR", f"Failed to convert mask to alpha channel: {str(mask_error)}")
+                    return mask_path
+            else:
+                log_and_print("ERROR", "No mask image data in response")
                 return None
                 
-            # Check file size
-            file_size = os.path.getsize(image_path)
-            logger.info(f"Original image size: {file_size} bytes")
-            
-            if file_size > 20 * 1024 * 1024:  # 20MB limit
-                logger.warning(f"Image too large ({file_size} bytes), resizing")
-                
-                # Open and resize the image
-                with Image.open(image_path) as img:
-                    # Calculate new dimensions to get under 15MB
-                    max_pixels = 4096 * 4096  # Maximum reasonable pixel count
-                    current_pixels = img.width * img.height
-                    
-                    if current_pixels > max_pixels:
-                        scale_factor = (max_pixels / current_pixels) ** 0.5
-                        new_width = int(img.width * scale_factor)
-                        new_height = int(img.height * scale_factor)
-                        logger.info(f"Resizing from {img.width}x{img.height} to {new_width}x{new_height}")
-                        
-                        # Resize the image
-                        img = img.resize((new_width, new_height), Image.LANCZOS)
-                        
-                    # Convert to RGB if needed
-                    if img.mode != 'RGB':
-                        logger.info(f"Converting image from {img.mode} to RGB")
-                        img = img.convert('RGB')
-                        
-                    # Save as JPEG with compression
-                    resized_path = f"{os.path.splitext(image_path)[0]}_resized.jpg"
-                    img.save(resized_path, format="JPEG", quality=85, optimize=True)
-                    
-                    # Verify new file size
-                    new_size = os.path.getsize(resized_path)
-                    logger.info(f"Resized image saved: {new_size} bytes")
-                    
-                    return resized_path
-            
-            # For smaller files, just verify format is compatible
-            with Image.open(image_path) as img:
-                # Convert if not RGB
-                if img.mode != 'RGB':
-                    logger.info(f"Converting image from {img.mode} to RGB")
-                    converted_path = f"{os.path.splitext(image_path)[0]}_converted.jpg"
-                    img.convert('RGB').save(converted_path, format="JPEG", quality=95)
-                    return converted_path
-                    
-            # If we got here, original file is fine
-            return image_path
-            
         except Exception as e:
-            logger.error(f"Error preparing image: {str(e)}")
-            logger.error(traceback.format_exc())
+            log_and_print("ERROR", f"Error generating mask: {str(e)}")
+            traceback.print_exc()
             return None
     
-    def generate_marketing_image(self, product_image_path: str, product_details: Dict, product_type: str = "beverage", logo_image_path: str = None) -> Optional[str]:
+    def generate_marketing_image(self, product_image_path: str, product_details: Dict, 
+                              product_type: str = "beverage", logo_image_path: Optional[str] = None) -> Optional[str]:
         """Generate a marketing image using OpenAI API with gpt-image-1 model"""
         try:
             # Start timing for performance tracking
             start_time = time.time()
             product_name = product_details.get('product_name', 'product')
             
-            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Starting image generation for {product_name} as {product_type}")
-            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Input image path: {product_image_path}")
-            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Product details: {json.dumps(product_details)}")
-            
-            logger.info(f"Starting image generation for {product_name} as {product_type}")
+            log_and_print("INFO", f"Starting image generation for {product_name} as {product_type}")
+            log_and_print("INFO", f"Input image path: {product_image_path}")
+            log_and_print("INFO", f"Logo image path: {logo_image_path}")
+            log_and_print("INFO", f"Product details: {json.dumps(product_details)}")
             
             # Select the appropriate prompt template
             if product_type.lower() == "beverage":
                 prompt = PromptTemplates.get_beverage_template(product_details)
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Using beverage template")
-                logger.info("Using beverage template")
+                log_and_print("INFO", "Using beverage template")
             elif product_type.lower() == "food":
                 prompt = PromptTemplates.get_food_template(product_details)
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Using food template")
-                logger.info("Using food template")
+                log_and_print("INFO", "Using food template")
             else:
                 prompt = PromptTemplates.get_master_template(product_details)
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Using master template")
-                logger.info("Using master template")
+                log_and_print("INFO", "Using master template")
             
-            # Prepare the product image for processing
-            processed_image_path = self.prepare_image(product_image_path)
-            if not processed_image_path:
-                logger.error("Failed to process product image")
+            log_and_print("INFO", f"Using prompt: {prompt}")
+            
+            # Check if we should use multi-image approach (with logo) or mask approach
+            if logo_image_path and os.path.exists(logo_image_path):
+                log_and_print("INFO", "Using multi-image approach with logo")
+                return self._generate_with_logo(product_image_path, logo_image_path, prompt, product_details)
+            else:
+                log_and_print("INFO", "Using mask approach (no logo provided)")
+                return self._generate_with_mask(product_image_path, prompt, product_details, product_type)
+                
+        except Exception as e:
+            log_and_print("ERROR", f"Error generating marketing image: {str(e)}")
+            traceback.print_exc()
+            return None
+    
+    def _generate_with_logo(self, product_image_path: str, logo_image_path: str, 
+                         prompt: str, product_details: Dict) -> Optional[str]:
+        """Generate marketing image with product and logo images"""
+        try:
+            log_and_print("INFO", "Starting image generation with product and logo")
+            
+            # Verify images exist
+            if not os.path.exists(product_image_path):
+                log_and_print("ERROR", f"Product image not found: {product_image_path}")
                 return None
             
-            # Enhance prompt with vision analysis (optional but improves results)
-            enhanced_prompt = self.enhance_prompt_with_vision(processed_image_path, prompt)
-            logger.info(f"Enhanced prompt length: {len(enhanced_prompt)} characters")
-            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Enhanced prompt created with vision analysis")
+            if not os.path.exists(logo_image_path):
+                log_and_print("ERROR", f"Logo image not found: {logo_image_path}")
+                return None
             
-            # If logo provided, add logo reference to prompt
-            if logo_image_path and os.path.exists(logo_image_path):
-                logger.info("Logo image provided, preparing for API")
-                processed_logo_path = self.prepare_image(logo_image_path)
-                if processed_logo_path:
-                    enhanced_prompt += "\n\nIncorporate the provided logo appropriately into the design, maintaining its proportions and visual integrity."
-                    print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Added logo reference to prompt")
+            # Add instruction to incorporate the logo
+            enhanced_prompt = f"{prompt}\n\nADDITIONAL INSTRUCTIONS: Incorporate the provided logo image appropriately into the design. Place it in a visible but not overwhelming position, likely near the company name or in a corner of the poster."
             
-            # Print truncated prompt for debugging
-            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] PROMPT: {enhanced_prompt[:200]}...")
+            # Generate with multiple images
+            max_retries = 3
+            retry_delay = 2
             
-            # Generate the image
-            try:
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Sending image generation request to OpenAI API with gpt-image-1 model")
-                logger.info("Sending image generation request to OpenAI API")
-                
-                # Add retries for production reliability
-                max_retries = 3
-                retry_delay = 2
-                
-                for retry in range(max_retries):
-                    try:
-                        print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] API call attempt {retry+1} of {max_retries}")
-                        
-                        # For images.edit with input image
-                        with open(processed_image_path, "rb") as image_file:
-                            # First try to use images.edit with the product image
-                            try:
-                                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Attempting images.edit API call")
-                                result = self.client.images.edit(
-                                    model="gpt-image-1",
-                                    prompt=enhanced_prompt,
-                                    image=image_file,
-                                    size="1024x1024",
-                                    n=1,
-                                    response_format="b64_json"
-                                )
-                                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] images.edit API call successful")
-                            except Exception as edit_error:
-                                # If edit fails, fallback to generate
-                                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] images.edit API call failed: {str(edit_error)}")
-                                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Falling back to images.generate")
-                                
-                                # Fallback to images.generate
-                                result = self.client.images.generate(
-                                    model="gpt-image-1",
-                                    prompt=enhanced_prompt,
-                                    size="1024x1024",
-                                    n=1,
-                                    response_format="b64_json",
-                                    quality="standard"
-                                )
-                                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] images.generate API call successful")
-                        
-                        # If successful, break the retry loop
-                        print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] API call successful")
-                        break
-                    except Exception as retry_error:
-                        print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] API call attempt {retry+1} failed: {str(retry_error)}")
-                        logger.warning(f"API call attempt {retry+1} failed: {str(retry_error)}")
-                        if retry < max_retries - 1:
-                            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Retrying in {retry_delay} seconds...")
-                            logger.info(f"Retrying in {retry_delay} seconds...")
-                            time.sleep(retry_delay)
-                            retry_delay *= 2  # Exponential backoff
-                        else:
-                            # Last attempt failed, re-raise the exception
-                            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] All API call retries failed")
-                            logger.error("All API call retries failed")
-                            raise
-                
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] OpenAI API request completed")
-                logger.info("OpenAI API request completed")
-                
-                # Check response structure
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Response structure: hasattr(data)={hasattr(result, 'data')}, len(data)={len(result.data) if hasattr(result, 'data') else 0}")
-                if hasattr(result, 'data') and len(result.data) > 0:
-                    print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] First data item has b64_json: {hasattr(result.data[0], 'b64_json')}")
-                
-                if hasattr(result, 'data') and len(result.data) > 0 and hasattr(result.data[0], 'b64_json'):
-                    print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Image base64 data received, decoding...")
-                    logger.info("Image base64 data received, decoding")
+            for retry in range(max_retries):
+                try:
+                    log_and_print("INFO", f"Multi-image API call attempt {retry+1}")
                     
-                    # Get the base64 data and decode it
-                    b64_data = result.data[0].b64_json
-                    print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Base64 data length: {len(b64_data)} characters")
+                    # Open both image files
+                    with open(product_image_path, "rb") as product_file, open(logo_image_path, "rb") as logo_file:
+                        # Pass multiple images to the API
+                        result = self.client.images.edit(
+                            model="gpt-image-1",
+                            image=[product_file, logo_file],
+                            prompt=enhanced_prompt,
+                            size="1024x1024",
+                            response_format="b64_json"
+                        )
                     
-                    image_bytes = base64.b64decode(b64_data)
-                    print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Decoded to {len(image_bytes)} bytes")
-                    logger.info("Image decoded successfully")
-                else:
-                    print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] ERROR: No image data in OpenAI response")
-                    logger.error("No image data in OpenAI response")
-                    if hasattr(result, 'data'):
-                        print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Response data: {result.data}")
-                    return None
+                    log_and_print("INFO", "Multi-image API call successful")
+                    break
+                except Exception as api_error:
+                    log_and_print("WARNING", f"Multi-image API call attempt {retry+1} failed: {str(api_error)}")
                     
+                    if retry < max_retries - 1:
+                        log_and_print("INFO", f"Retrying in {retry_delay} seconds...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                    else:
+                        log_and_print("ERROR", "All multi-image API call retries failed")
+                        # Fall back to mask approach
+                        log_and_print("INFO", "Falling back to mask approach")
+                        return self._generate_with_mask(product_image_path, prompt, product_details, "generic")
+            
+            # Process and save the result
+            return self._process_and_save_result(result, product_details)
+            
+        except Exception as e:
+            log_and_print("ERROR", f"Error in multi-image generation: {str(e)}")
+            traceback.print_exc()
+            return None
+    
+    def _generate_with_mask(self, product_image_path: str, prompt: str, 
+                         product_details: Dict, product_type: str) -> Optional[str]:
+        """Generate marketing image using mask approach"""
+        try:
+            log_and_print("INFO", "Starting image generation with mask approach")
+            
+            # Generate a mask for the product
+            mask_path = self.generate_mask(product_image_path, product_type)
+            if not mask_path:
+                log_and_print("ERROR", "Failed to generate mask, attempting without mask")
+                
+                # Try simple edit without mask as fallback
+                return self._generate_simple_edit(product_image_path, prompt, product_details)
+            
+            log_and_print("INFO", f"Using mask at {mask_path}")
+            
+            # Generate with mask
+            max_retries = 3
+            retry_delay = 2
+            
+            for retry in range(max_retries):
+                try:
+                    log_and_print("INFO", f"Masked image API call attempt {retry+1}")
+                    
+                    # Open image and mask files
+                    with open(product_image_path, "rb") as img_file, open(mask_path, "rb") as mask_file:
+                        # Use masked editing
+                        result = self.client.images.edit(
+                            model="gpt-image-1",
+                            image=img_file,
+                            mask=mask_file,
+                            prompt=prompt,
+                            size="1024x1024",
+                            response_format="b64_json"
+                        )
+                    
+                    log_and_print("INFO", "Masked image API call successful")
+                    break
+                except Exception as api_error:
+                    log_and_print("WARNING", f"Masked image API call attempt {retry+1} failed: {str(api_error)}")
+                    
+                    if retry < max_retries - 1:
+                        log_and_print("INFO", f"Retrying in {retry_delay} seconds...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                    else:
+                        log_and_print("ERROR", "All masked image API call retries failed")
+                        # Fall back to simple edit
+                        log_and_print("INFO", "Falling back to simple edit approach")
+                        return self._generate_simple_edit(product_image_path, prompt, product_details)
+            
+            # Process and save the result
+            return self._process_and_save_result(result, product_details)
+            
+        except Exception as e:
+            log_and_print("ERROR", f"Error in masked image generation: {str(e)}")
+            traceback.print_exc()
+            return None
+    
+    def _generate_simple_edit(self, product_image_path: str, prompt: str, 
+                           product_details: Dict) -> Optional[str]:
+        """Generate marketing image using simple edit approach (fallback)"""
+        try:
+            log_and_print("INFO", "Starting image generation with simple edit approach")
+            
+            # Use simple edit as last resort
+            max_retries = 3
+            retry_delay = 2
+            
+            for retry in range(max_retries):
+                try:
+                    log_and_print("INFO", f"Simple edit API call attempt {retry+1}")
+                    
+                    # Open image file
+                    with open(product_image_path, "rb") as img_file:
+                        # Use simple editing
+                        result = self.client.images.edit(
+                            model="gpt-image-1",
+                            image=img_file,
+                            prompt=prompt,
+                            size="1024x1024",
+                            response_format="b64_json"
+                        )
+                    
+                    log_and_print("INFO", "Simple edit API call successful")
+                    break
+                except Exception as api_error:
+                    log_and_print("WARNING", f"Simple edit API call attempt {retry+1} failed: {str(api_error)}")
+                    
+                    if retry < max_retries - 1:
+                        log_and_print("INFO", f"Retrying in {retry_delay} seconds...")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                    else:
+                        log_and_print("ERROR", "All simple edit API call retries failed")
+                        return None
+            
+            # Process and save the result
+            return self._process_and_save_result(result, product_details)
+            
+        except Exception as e:
+            log_and_print("ERROR", f"Error in simple edit generation: {str(e)}")
+            traceback.print_exc()
+            return None
+    
+    def _process_and_save_result(self, result, product_details: Dict) -> Optional[str]:
+        """Process API result and save the generated image"""
+        try:
+            # Process the result
+            if hasattr(result, 'data') and len(result.data) > 0 and hasattr(result.data[0], 'b64_json'):
+                log_and_print("INFO", "Image data received, decoding")
+                
+                # Decode the base64 image
+                b64_data = result.data[0].b64_json
+                image_bytes = base64.b64decode(b64_data)
+                
                 # Save the image
                 timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-                product_name_safe = product_details.get('product_name', 'product').replace(' ', '_')[:20]
+                product_name_safe = ''.join(c if c.isalnum() else '_' for c in product_details.get('product_name', 'product'))[:20]
                 output_filename = f"{product_name_safe}_{timestamp}.png"
                 output_path = os.path.join("images/output", output_filename)
                 
-                # Convert to image
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Creating image from bytes")
-                logger.info("Creating image from bytes")
-                image = Image.open(BytesIO(image_bytes))
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Image created with size: {image.size}, mode: {image.mode}")
+                # Ensure output directory exists
+                os.makedirs("images/output", exist_ok=True)
                 
-                # Optionally resize for optimization
-                if image.size[0] > 1500 or image.size[1] > 1500:
-                    print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Resizing image from {image.size} to max 1500px")
-                    logger.info(f"Resizing image from {image.size} to max 1500px")
-                    image.thumbnail((1500, 1500), Image.LANCZOS)
-                    print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Image resized to {image.size}")
+                # Save image
+                with open(output_path, "wb") as f:
+                    f.write(image_bytes)
                 
-                # Save the image
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Saving image to {output_path}")
-                logger.info(f"Saving image to {output_path}")
-                image.save(output_path, format="PNG", optimize=True)
-                
-                # Calculate total processing time
-                processing_time = time.time() - start_time
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Marketing image saved to {output_path}")
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Total processing time: {processing_time:.2f} seconds")
-                logger.info(f"Marketing image saved to {output_path}")
-                logger.info(f"Total image generation time: {processing_time:.2f} seconds")
-                
+                log_and_print("INFO", f"Marketing image saved to {output_path}")
                 return output_path
-                
-            except Exception as api_error:
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] OpenAI API Error: {str(api_error)}")
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Error type: {type(api_error).__name__}")
-                logger.error(f"OpenAI API Error: {str(api_error)}")
-                
-                # Print the full traceback for debugging
-                import traceback
-                traceback_str = traceback.format_exc()
-                print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Traceback: {traceback_str}")
-                logger.error(f"Traceback: {traceback_str}")
-                
+            else:
+                log_and_print("ERROR", "No image data in response")
                 return None
                 
         except Exception as e:
-            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Error generating marketing image: {str(e)}")
-            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Error type: {type(e).__name__}")
-            logger.error(f"Error generating marketing image: {str(e)}")
-            
-            # Print the full traceback for debugging
-            import traceback
-            traceback_str = traceback.format_exc()
-            print(f"[DEBUG][{datetime.now().strftime('%H:%M:%S')}] Traceback: {traceback_str}")
-            logger.error(f"Traceback: {traceback_str}")
-            
+            log_and_print("ERROR", f"Error processing and saving result: {str(e)}")
+            traceback.print_exc()
             return None
 
 ###################
@@ -691,21 +734,26 @@ class MarketingBot:
         self.waapi_client = WaAPIClient(waapi_token, waapi_instance_id)
         logger.info("MarketingBot initialized with OpenAI and WaAPI")
     
-    def process_request(self, user_id: str, product_image_path: str, product_details: Dict, product_type: str = "beverage", logo_image_path: str = None) -> Dict:
+    def process_request(self, user_id: str, product_image_path: str, product_details: Dict, 
+                       product_type: str = "beverage", logo_image_path: Optional[str] = None) -> Dict:
         """Process a marketing image request"""
         try:
             logger.info(f"Processing request for user {user_id}")
             debug_print(f"Processing request for user {user_id}")
             debug_print(f"Product image path: {product_image_path}")
+            debug_print(f"Logo image path: {logo_image_path if logo_image_path else 'None'}")
             debug_print(f"Product details: {json.dumps(product_details)}")
             debug_print(f"Product type: {product_type}")
-            if logo_image_path:
-                debug_print(f"Logo image path: {logo_image_path}")
             
             # Check if product image exists
             if not os.path.exists(product_image_path):
                 debug_print(f"ERROR: Product image does not exist: {product_image_path}")
                 return {"success": False, "error": "Product image file not found"}
+            
+            # Check logo image if provided
+            if logo_image_path and not os.path.exists(logo_image_path):
+                debug_print(f"ERROR: Logo image does not exist: {logo_image_path}")
+                return {"success": False, "error": "Logo image file not found"}
             
             # Check file size
             file_size = os.path.getsize(product_image_path)
@@ -717,16 +765,15 @@ class MarketingBot:
                     debug_print(f"Image opened successfully: {img.format}, {img.size}, {img.mode}")
             except Exception as img_error:
                 debug_print(f"Error opening image: {str(img_error)}")
-                return {"success": False, "error": f"Invalid image format: {str(img_error)}"}
             
             # Generate marketing image
             logger.info("Starting image generation")
             debug_print("Starting image generation with gpt-image-1 model")
             output_path = self.image_generator.generate_marketing_image(
-                product_image_path=product_image_path,
-                product_details=product_details,
-                product_type=product_type,
-                logo_image_path=logo_image_path
+                product_image_path,
+                product_details,
+                product_type,
+                logo_image_path
             )
             
             if output_path:
@@ -767,86 +814,6 @@ marketing_bot = MarketingBot(
 # MESSAGE HANDLERS
 ###################
 
-def process_image(from_number: str, media_data, is_logo: bool = False):
-    """Process an incoming image (product or logo)"""
-    try:
-        session = user_sessions[from_number]
-        
-        # Get image data
-        if media_data and media_data.get('data'):  
-            # Normal path - we have base64 data
-            logger.info("Image data found. Decoding base64 data...")
-            image_bytes = base64.b64decode(media_data['data'])
-        else:
-            # No media data in webhook - common with API limitations
-            logger.warning("No image data in webhook - creating placeholder image")
-            
-            # Save a placeholder image (1x1 transparent pixel)
-            image_bytes = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=")
-            
-            # Let the user know
-            marketing_bot.waapi_client.send_message(
-                from_number,
-                "⚠️ I received your image but couldn't access its data due to API limitations.\n\n"
-                "I'll continue with a placeholder image for testing purposes."
-            )
-        
-        # Save the image
-        image_type = "logo" if is_logo else "product"
-        filename = f"whatsapp_{image_type}_{from_number.replace('@c.us', '')}_{int(datetime.now().timestamp())}.jpg"
-        image_path = os.path.join("images/input", filename)
-        
-        logger.info(f"Saving {image_type} image to {image_path}")
-        with open(image_path, 'wb') as f:
-            f.write(image_bytes)
-        
-        logger.info(f"Image saved to {image_path}")
-        
-        # Update session based on image type
-        if is_logo:
-            session['logo_image'] = image_path
-            session['expecting_logo'] = False
-            
-            # Confirm logo received
-            marketing_bot.waapi_client.send_message(
-                from_number,
-                "✅ Logo image received!\n\n"
-                "Your logo will be incorporated into the final design.\n\n"
-                "When you're ready to generate the image, send 'generate'"
-            )
-        else:
-            # Product image
-            session['product_image'] = image_path
-            session['state'] = 'waiting_for_details'
-            logger.info("Session state changed to 'waiting_for_details'")
-            
-            marketing_bot.waapi_client.send_message(
-                from_number,
-                "✅ Product image received!\n\n"
-                "Now please provide the following details:\n\n"
-                "1️⃣ Company name\n"
-                "2️⃣ Product name\n"
-                "3️⃣ Price\n"
-                "4️⃣ Tagline (optional)\n"
-                "5️⃣ Address (optional)\n\n"
-                "You can send them one by one or all at once.\n"
-                "Example format:\n"
-                "Company: ABC Corp\n"
-                "Product: Premium Coffee\n"
-                "Price: $20\n\n"
-                "When you're ready to generate the image, send 'generate'\n"
-                "To add a company logo, send 'logo' and then send the image."
-            )
-        
-        logger.info("Successfully processed image and sent response")
-        
-    except Exception as e:
-        logger.error(f"Error processing image: {str(e)}")
-        marketing_bot.waapi_client.send_message(
-            from_number,
-            "Sorry, I couldn't process your image. Please try again."
-        )
-
 def handle_text_message(from_number: str, text: str):
     """Handle incoming text messages"""
     try:
@@ -861,8 +828,7 @@ def handle_text_message(from_number: str, text: str):
                 "product_image": None,
                 "logo_image": None,
                 "details": {},
-                "state": "waiting_for_command",
-                "expecting_logo": False
+                "state": "waiting_for_command"
             }
         
         session = user_sessions[from_number]
@@ -875,26 +841,15 @@ def handle_text_message(from_number: str, text: str):
             session['product_image'] = None
             session['logo_image'] = None
             session['details'] = {}
-            session['expecting_logo'] = False
             logger.info(f"Session state changed to 'waiting_for_image'")
             
             marketing_bot.waapi_client.send_message(
                 from_number,
                 "Welcome to Marketing Image Editor! 📸\n\n"
                 "Please send your product image to begin.\n\n"
-                "After sending the image, I'll ask for details like company name, product name, price, etc."
+                "After sending the product image, you can optionally send a logo image, and then I'll ask for details like company name, product name, price, etc."
             )
             logger.info(f"Sent welcome message to {from_number}")
-            return
-        
-        # Check for logo command
-        if text.lower() == 'logo' and session['state'] == 'waiting_for_details':
-            logger.info(f"User {from_number} wants to add a logo")
-            session['expecting_logo'] = True
-            marketing_bot.waapi_client.send_message(
-                from_number,
-                "Please send your company logo image. It will be integrated into the design."
-            )
             return
         
         # Check for generate command
@@ -933,9 +888,6 @@ def handle_text_message(from_number: str, text: str):
                 )
                 return
             
-            # Reset expecting_logo flag
-            session['expecting_logo'] = False
-            
             # Generate the image
             logger.info(f"Sending generation message to {from_number}")
             marketing_bot.waapi_client.send_message(
@@ -947,15 +899,25 @@ def handle_text_message(from_number: str, text: str):
             logger.info(f"Starting image generation process for {from_number}")
             debug_print(f"Starting image generation process for {from_number}")
             debug_print(f"Product image path: {session['product_image']}")
+            debug_print(f"Logo image path: {session.get('logo_image', 'None')}")
             debug_print(f"Product details: {json.dumps(details)}")
-            if session.get('logo_image'):
-                debug_print(f"Logo image path: {session['logo_image']}")
+            
+            try:
+                # Add a check to verify the product image exists
+                if not os.path.exists(session['product_image']):
+                    debug_print(f"WARNING: Product image file does not exist: {session['product_image']}")
+                    # Create a dummy file if needed for testing
+                    with open(session['product_image'], 'wb') as f:
+                        f.write(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="))
+                    debug_print(f"Created placeholder image at: {session['product_image']}")
+            except Exception as img_check_error:
+                debug_print(f"Error checking product image: {str(img_check_error)}")
             
             result = marketing_bot.process_request(
                 from_number,
                 session['product_image'],
                 details,
-                product_type="beverage",  # Could be dynamic based on user selection
+                product_type="beverage",  # Default to beverage, can be customized
                 logo_image_path=session.get('logo_image')
             )
             
@@ -1012,18 +974,34 @@ def handle_text_message(from_number: str, text: str):
             )
             return
         
-        elif session['state'] == 'waiting_for_details':
-            # If expecting a logo but got text instead
-            if session['expecting_logo']:
-                logger.info(f"User {from_number} sent text while expecting logo")
-                session['expecting_logo'] = False
+        elif session['state'] == 'waiting_for_logo':
+            # Handle skipping logo
+            if text.lower() in ['skip', 'no logo', 'none', 'no']:
+                logger.info(f"User {from_number} chose to skip logo")
+                session['logo_image'] = None
+                session['state'] = 'waiting_for_details'
+                
                 marketing_bot.waapi_client.send_message(
                     from_number,
-                    "I was expecting a logo image, but received text instead.\n"
-                    "Continuing without a logo. You can send 'logo' again if you want to add one."
+                    "✅ Logo skipped. Now please provide the following details:\n\n"
+                    "1️⃣ Company name\n"
+                    "2️⃣ Product name\n"
+                    "3️⃣ Price\n"
+                    "4️⃣ Tagline (optional)\n"
+                    "5️⃣ Address (optional)\n\n"
+                    "You can send them one by one or all at once."
                 )
-                
-            # Process details as normal
+                return
+            else:
+                logger.info(f"User {from_number} sent text while waiting for logo")
+                marketing_bot.waapi_client.send_message(
+                    from_number,
+                    "I'm waiting for a logo image.\n"
+                    "You can send an image file or type 'skip' to continue without a logo."
+                )
+                return
+        
+        elif session['state'] == 'waiting_for_details':
             logger.info(f"User {from_number} sent details: {text}")
             # Parse the details
             lines = text.split('\n')
@@ -1088,11 +1066,7 @@ def handle_text_message(from_number: str, text: str):
             status_msg += f"Product: {session['details'].get('product_name', '❌')}\n"
             status_msg += f"Price: {session['details'].get('price', '❌')}\n"
             status_msg += f"Tagline: {session['details'].get('tagline', '➖')}\n"
-            status_msg += f"Address: {session['details'].get('address', '➖')}\n"
-            if session.get('logo_image'):
-                status_msg += f"Logo: ✅\n\n"
-            else:
-                status_msg += f"Logo: ➖\n\n"
+            status_msg += f"Address: {session['details'].get('address', '➖')}\n\n"
             
             # Check what's still needed
             if not session['details'].get('company_name'):
@@ -1104,9 +1078,7 @@ def handle_text_message(from_number: str, text: str):
             else:
                 status_msg += "✅ All required information received!\n\n"
                 status_msg += "To generate the marketing image, send 'generate'\n"
-                status_msg += "To add optional details (tagline, address), just send them.\n"
-                if not session.get('logo_image'):
-                    status_msg += "To add a company logo, send 'logo' and then send the image."
+                status_msg += "To add optional details (tagline, address), just send them."
             
             marketing_bot.waapi_client.send_message(from_number, status_msg)
             return
@@ -1143,8 +1115,7 @@ def handle_image_message(from_number: str, media_data):
                 "product_image": None,
                 "logo_image": None,
                 "details": {},
-                "state": "waiting_for_command",
-                "expecting_logo": False
+                "state": "waiting_for_command"
             }
         
         session = user_sessions[from_number]
@@ -1152,26 +1123,121 @@ def handle_image_message(from_number: str, media_data):
         # Debug session state
         logger.info(f"Current session state: {session['state']}")
         
-        # Special handling for logo images
-        if session['state'] == 'waiting_for_details' and session['expecting_logo']:
-            logger.info(f"Processing logo image for {from_number}")
-            # Process the logo image from media_data
-            process_image(from_number, media_data, is_logo=True)
-            return
-        
-        # Regular product image handling
-        # Check if we're in the right state to receive a product image
-        if session['state'] != 'waiting_for_image':
-            logger.warning(f"Received image but session state is {session['state']}, not waiting_for_image")
+        # Check if we're in the right state to receive an image
+        if session['state'] == 'waiting_for_image':
+            # Processing product image
+            try:
+                if media_data and media_data.get('data'):  
+                    # Normal path - we have base64 data
+                    logger.info("Product image data found. Decoding base64 data...")
+                    image_bytes = base64.b64decode(media_data['data'])
+                else:
+                    # No media data in webhook - this is common with WaAPI's trial limitations
+                    # Create a placeholder image for testing
+                    logger.warning("No image data in webhook - creating placeholder image")
+                    
+                    # Save a placeholder image (1x1 transparent pixel)
+                    image_bytes = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=")
+                    
+                    # Let the user know about the limitation
+                    marketing_bot.waapi_client.send_message(
+                        from_number,
+                        "⚠️ I received your image but couldn't access its data due to trial account limitations.\n\n"
+                        "I'll continue with a placeholder image for testing purposes."
+                    )
+                
+                # Save the product image
+                filename = f"product_{from_number.replace('@c.us', '')}_{int(datetime.now().timestamp())}.png"
+                image_path = os.path.join("images/input", filename)
+                
+                logger.info(f"Saving product image to {image_path}")
+                with open(image_path, 'wb') as f:
+                    f.write(image_bytes)
+                
+                logger.info(f"Product image saved to {image_path}")
+                session['product_image'] = image_path
+                session['state'] = 'waiting_for_logo'
+                logger.info("Session state changed to 'waiting_for_logo'")
+                
+                marketing_bot.waapi_client.send_message(
+                    from_number,
+                    "✅ Product image received!\n\n"
+                    "You can now optionally send a logo image. If you don't want to include a logo, type 'skip'."
+                )
+                
+            except Exception as e:
+                logger.error(f"Error processing product image: {str(e)}")
+                marketing_bot.waapi_client.send_message(
+                    from_number,
+                    "Sorry, I couldn't process your product image. Please try again."
+                )
+                
+        elif session['state'] == 'waiting_for_logo':
+            # Processing logo image
+            try:
+                if media_data and media_data.get('data'):  
+                    # Normal path - we have base64 data
+                    logger.info("Logo image data found. Decoding base64 data...")
+                    image_bytes = base64.b64decode(media_data['data'])
+                else:
+                    # No media data in webhook
+                    logger.warning("No logo image data in webhook - creating placeholder logo")
+                    
+                    # Save a placeholder image
+                    image_bytes = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=")
+                    
+                    marketing_bot.waapi_client.send_message(
+                        from_number,
+                        "⚠️ I received your logo but couldn't access its data due to trial account limitations.\n\n"
+                        "I'll continue with a placeholder logo for testing purposes."
+                    )
+                
+                # Save the logo image
+                filename = f"logo_{from_number.replace('@c.us', '')}_{int(datetime.now().timestamp())}.png"
+                image_path = os.path.join("images/logos", filename)
+                
+                logger.info(f"Saving logo image to {image_path}")
+                os.makedirs("images/logos", exist_ok=True)
+                with open(image_path, 'wb') as f:
+                    f.write(image_bytes)
+                
+                logger.info(f"Logo image saved to {image_path}")
+                session['logo_image'] = image_path
+                session['state'] = 'waiting_for_details'
+                logger.info("Session state changed to 'waiting_for_details'")
+                
+                marketing_bot.waapi_client.send_message(
+                    from_number,
+                    "✅ Logo image received!\n\n"
+                    "Now please provide the following details:\n\n"
+                    "1️⃣ Company name\n"
+                    "2️⃣ Product name\n"
+                    "3️⃣ Price\n"
+                    "4️⃣ Tagline (optional)\n"
+                    "5️⃣ Address (optional)\n\n"
+                    "You can send them one by one or all at once.\n"
+                    "Example format:\n"
+                    "Company: ABC Corp\n"
+                    "Product: Premium Coffee\n"
+                    "Price: $20"
+                )
+                
+            except Exception as e:
+                logger.error(f"Error processing logo image: {str(e)}")
+                marketing_bot.waapi_client.send_message(
+                    from_number,
+                    "Sorry, I couldn't process your logo image. Please try again or type 'skip' to continue without a logo."
+                )
+                
+        else:
+            # Received image in wrong state
+            logger.warning(f"Received image but session state is {session['state']}, not expecting an image")
             marketing_bot.waapi_client.send_message(
                 from_number,
                 "I wasn't expecting an image right now.\n"
-                "To start the process, please send 'edit' first."
+                "To start the process, please send 'edit' first.\n\n"
+                "You can also type 'cancel' to exit the current process."
             )
-            return
-        
-        # Process the image from media_data
-        process_image(from_number, media_data, is_logo=False)
             
     except Exception as e:
         logger.error(f"Error handling image message: {str(e)}")
@@ -1329,12 +1395,12 @@ if __name__ == '__main__':
     
     debug_print(f"Python version: {sys.version}")
     debug_print(f"Platform info: {platform.platform()}")
-    debug_print(f"Pillow version: {Image.__version__ if hasattr(Image, '__version__') else 'unknown'}")
+    debug_print(f"Pillow version: {Image.__version__}")
     debug_print(f"Running in directory: {os.getcwd()}")
     debug_print(f"Environment variables: PORT={port}")
     
     # Check for required directories
-    for directory in ['images', 'images/input', 'images/output']:
+    for directory in ['images', 'images/input', 'images/output', 'images/masks', 'images/logos']:
         path = os.path.join(os.getcwd(), directory)
         exists = os.path.exists(path)
         is_dir = os.path.isdir(path) if exists else False
