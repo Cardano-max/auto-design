@@ -479,82 +479,66 @@ class MaytapiClient:
         return {"success": False, "error": "All retries failed"}
     
     def get_media_content(self, message_id: str) -> Optional[bytes]:
-        """Fetch media content directly from Maytapi API using message ID with improved error handling
+        """
+        Fetches media content from Maytapi API.
         
         Args:
-            message_id: The ID of the message containing media
+            message_id: The ID of the message containing the media
             
         Returns:
-            Optional bytes of media content
+            Optional[bytes]: The media content as bytes if successful, None otherwise
         """
         try:
-            # Construct endpoint for media content
-            endpoint = f"/{self.phone_id}/getMedia/{message_id}"
+            # First, get the message details to check if it's a media message
+            message_endpoint = f"/{self.phone_id}/getMessage/{message_id}"
+            response = self._make_request("GET", message_endpoint)
             
-            # Make request to fetch media
-            log_and_print("INFO", f"Fetching media content for message ID: {message_id}")
-            url = f"{self.api_base_url}{endpoint}"
-            
-            # Add retries for reliability
-            max_retries = 3
-            retry_delay = 1
-            
-            for retry in range(max_retries):
-                try:
-                    log_and_print("INFO", f"Media fetch attempt {retry+1}")
-                    response = requests.get(url, headers=self.headers, timeout=60)  # Longer timeout for media
-                    
-                    # Check if successful
-                    if response.status_code == 200:
-                        log_and_print("INFO", f"Successfully fetched media content, size: {len(response.content)} bytes")
-                        
-                        # Verify it's actually image data
-                        if len(response.content) > 100:  # Basic size check
-                            try:
-                                # Test if it's valid image data
-                                Image.open(BytesIO(response.content))
-                                return response.content
-                            except Exception as img_err:
-                                log_and_print("ERROR", f"Received data is not a valid image: {str(img_err)}")
-                        else:
-                            log_and_print("ERROR", f"Media content too small, likely not an image: {len(response.content)} bytes")
-                    else:
-                        log_and_print("ERROR", f"Failed to fetch media: HTTP {response.status_code}")
-                    
-                    # If we get here, we need to retry
-                    if retry < max_retries - 1:
-                        log_and_print("INFO", f"Retrying media fetch in {retry_delay} seconds...")
-                        time.sleep(retry_delay)
-                        retry_delay *= 2
-                    else:
-                        log_and_print("ERROR", "All media fetch retries failed")
-                        return None
-                        
-                except requests.exceptions.Timeout:
-                    log_and_print("ERROR", "Media fetch request timed out")
-                    if retry < max_retries - 1:
-                        log_and_print("INFO", f"Retrying media fetch in {retry_delay} seconds...")
-                        time.sleep(retry_delay)
-                        retry_delay *= 2
-                    else:
-                        log_and_print("ERROR", "All media fetch retries timed out")
-                        return None
+            if not response.get('success'):
+                log_and_print("ERROR", f"Failed to get message details: {response}")
+                return None
                 
-                except Exception as retry_error:
-                    log_and_print("ERROR", f"Error during media fetch attempt {retry+1}: {str(retry_error)}")
-                    if retry < max_retries - 1:
-                        log_and_print("INFO", f"Retrying media fetch in {retry_delay} seconds...")
-                        time.sleep(retry_delay)
-                        retry_delay *= 2
-                    else:
-                        log_and_print("ERROR", "All media fetch retries failed")
-                        return None
+            message_data = response.get('data', [])
+            if not message_data:
+                log_and_print("ERROR", "No message data found")
+                return None
+                
+            # Get the first message
+            message = message_data[0].get('message', {})
+            message_type = message.get('type', '')
             
-            # If we get here, all retries failed
-            return None
+            if message_type not in ['image', 'document', 'video', 'audio']:
+                log_and_print("ERROR", f"Message is not a media type: {message_type}")
+                return None
+                
+            # Check for direct media URL
+            media_url = message.get('media', '')
+            if not media_url:
+                log_and_print("ERROR", "No media URL found in message")
+                return None
+                
+            # Fetch the media content
+            try:
+                response = requests.get(
+                    media_url,
+                    headers={
+                        'x-maytapi-key': self.api_token,
+                        'Content-Type': 'application/json'
+                    },
+                    timeout=30
+                )
+                
+                if response.status_code == 200:
+                    return response.content
+                else:
+                    log_and_print("ERROR", f"Failed to fetch media: HTTP {response.status_code}")
+                    return None
+                    
+            except requests.exceptions.RequestException as e:
+                log_and_print("ERROR", f"Error fetching media: {str(e)}")
+                return None
                 
         except Exception as e:
-            log_and_print("ERROR", f"Error fetching media content: {str(e)}")
+            log_and_print("ERROR", f"Error in get_media_content: {str(e)}")
             return None
     
     def send_message(self, to_number: str, message: str, typing: bool = True) -> Dict:
