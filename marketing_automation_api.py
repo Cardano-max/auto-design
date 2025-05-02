@@ -10,6 +10,8 @@ Fixed issues:
 - Edit command triggering only for the specific user
 - Complete session termination after generate
 - Improved image handling
+- Fixed repeated welcome message issue
+- Fixed audio message handling
 """
 
 import os
@@ -60,9 +62,6 @@ app = Flask(__name__, static_folder='static', template_folder='templates')
 # Create directories for storing images
 os.makedirs('images/input', exist_ok=True)
 os.makedirs('images/output', exist_ok=True)
-
-# Store user sessions with unique IDs
-user_sessions = {}
 
 # Store processed messages to prevent duplicates
 processed_messages = {}
@@ -252,7 +251,6 @@ class ImageGenerator:
                     
                     # Open the image file for sending
                     with open(product_image_path, "rb") as image_file:
-                        # Use images.generate for simple generation without image input
                         # Use images.edit for generation with image input
                         result = self.client.images.edit(
                             model="gpt-image-1",
@@ -627,7 +625,8 @@ class SessionManager:
             "product_image": None,
             "details": {},
             "created_at": datetime.now().isoformat(),
-            "last_active": datetime.now().isoformat()
+            "last_active": datetime.now().isoformat(),
+            "welcomed": False,  # Track if welcome message has been sent
         }
         self.sessions[user_id] = session
         log_and_print("INFO", f"Created new session for user {user_id}")
@@ -693,7 +692,10 @@ class SessionManager:
         user_id = self.get_user_id(from_number)
         
         if user_id in self.sessions:
-            # Reset session to initial state
+            # Get existing welcomed state
+            welcomed = self.sessions[user_id].get('welcomed', False)
+            
+            # Reset session to initial state, but keep welcomed state
             self.sessions[user_id] = {
                 "user_id": user_id,
                 "phone_number": from_number,
@@ -701,9 +703,10 @@ class SessionManager:
                 "product_image": None,
                 "details": {},
                 "created_at": datetime.now().isoformat(),
-                "last_active": datetime.now().isoformat()
+                "last_active": datetime.now().isoformat(),
+                "welcomed": welcomed  # Preserve welcomed status
             }
-            log_and_print("INFO", f"Ended session for user {user_id}")
+            log_and_print("INFO", f"Ended session for user {user_id}, preserved welcomed state: {welcomed}")
             return True
         
         return False
@@ -806,6 +809,10 @@ class ImageHandler:
         try:
             image_bytes = None
             
+            # Print media data structure for debugging
+            print(f"[DEBUG] Media data type: {type(media_data)}")
+            print(f"[DEBUG] Media data: {json.dumps(media_data) if isinstance(media_data, dict) else 'Not a dict'}")
+            
             # Try to extract image data from various possible formats
             if media_data:
                 # Try direct data field first
@@ -818,7 +825,7 @@ class ImageHandler:
                     log_and_print("INFO", "Found image data in 'body' field with mimetype")
                     image_bytes = base64.b64decode(media_data['body'])
                 
-                # Try for Maytapi-specific format
+                # Try for Maytapi-specific format - file field
                 elif isinstance(media_data, dict) and 'file' in media_data:
                     log_and_print("INFO", "Found image data in Maytapi 'file' field")
                     if isinstance(media_data['file'], str):
@@ -834,11 +841,24 @@ class ImageHandler:
                                 image_bytes = response.content
                             else:
                                 log_and_print("ERROR", f"Failed to download image from URL: {response.status_code}")
+                
+                # Try media field from Maytapi webhook format
+                elif isinstance(media_data, dict) and isinstance(media_data.get('message'), dict):
+                    if 'media' in media_data['message']:
+                        log_and_print("INFO", "Found image in message.media field")
+                        media_url = media_data['message']['media']
+                        if isinstance(media_url, str) and media_url.startswith('http'):
+                            response = requests.get(media_url)
+                            if response.status_code == 200:
+                                image_bytes = response.content
+                            else:
+                                log_and_print("ERROR", f"Failed to download image from message.media URL: {response.status_code}")
             
             return image_bytes
         
         except Exception as e:
             log_and_print("ERROR", f"Error extracting image data: {str(e)}")
+            traceback.print_exc()
             return None
     
     @staticmethod
@@ -863,13 +883,26 @@ class ImageHandler:
                 font = ImageFont.load_default()
             
             text = "Placeholder Image"
-            text_width = draw.textlength(text, font=font)
-            draw.text(
-                ((300 - text_width) / 2, 140),
-                text,
-                fill='black',
-                font=font
-            )
+            
+            # Handle different PIL versions for text drawing
+            try:
+                # For newer PIL versions
+                text_width = draw.textlength(text, font=font)
+                draw.text(
+                    ((300 - text_width) / 2, 140),
+                    text,
+                    fill='black',
+                    font=font
+                )
+            except AttributeError:
+                # For older PIL versions
+                text_width, _ = draw.textsize(text, font=font)
+                draw.text(
+                    ((300 - text_width) / 2, 140),
+                    text,
+                    fill='black',
+                    font=font
+                )
             
             # Convert to bytes
             img_byte_arr = BytesIO()
@@ -1245,12 +1278,27 @@ class MarketingBot:
             
             # Default state - waiting for command
             else:
-                log_and_print("INFO", f"User {user_id} sent message in default state")
-                self.whatsapp_client.send_message(
-                    from_number,
-                    "👋 Welcome to Marketing Image Generator!\n\n"
-                    "To create a marketing image, send 'edit' to start."
-                )
+                log_and_print("INFO", f"User {user_id} sent message in default state: '{text}'")
+                
+                # Check if we've already sent welcome message
+                if not session.get('welcomed', False):
+                    log_and_print("INFO", f"Sending initial welcome to user {user_id}")
+                    self.whatsapp_client.send_message(
+                        from_number,
+                        "👋 Welcome to Marketing Image Generator!\n\n"
+                        "To create a marketing image, send 'edit' to start."
+                    )
+                    # Mark this user as welcomed
+                    self.session_manager.update_session(from_number, {
+                        "welcomed": True
+                    })
+                else:
+                    # For subsequent messages, just give a gentle reminder
+                    log_and_print("INFO", f"User {user_id} sent unrecognized text: {text}")
+                    self.whatsapp_client.send_message(
+                        from_number,
+                        "To start creating a marketing image, please send 'edit'."
+                    )
                 return
             
         except Exception as e:
@@ -1375,6 +1423,45 @@ class MarketingBot:
                 )
             except Exception as send_error:
                 log_and_print("ERROR", f"Failed to send error message: {str(send_error)}")
+    
+    def handle_audio_message(self, from_number: str):
+        """Handle incoming audio messages
+        
+        Args:
+            from_number: User's WhatsApp number
+        """
+        try:
+            log_and_print("INFO", f"Audio message received from {from_number}")
+            
+            # Get user's session
+            session = self.session_manager.get_session(from_number)
+            user_id = session["user_id"]
+            
+            # Check if we've already welcomed the user
+            if not session.get('welcomed', False):
+                # Send welcome and mark as welcomed
+                self.whatsapp_client.send_message(
+                    from_number,
+                    "👋 Welcome to Marketing Image Generator!\n\n"
+                    "I received your voice message, but I work better with text.\n\n"
+                    "To create a marketing image, send 'edit' to start."
+                )
+                self.session_manager.update_session(from_number, {
+                    "welcomed": True
+                })
+            else:
+                # Just send a helpful reminder
+                self.whatsapp_client.send_message(
+                    from_number,
+                    "I received your voice message, but I work better with text.\n\n"
+                    "To create a marketing image, please send 'edit'."
+                )
+            
+            log_and_print("INFO", f"Audio message handled for user {user_id}")
+            
+        except Exception as e:
+            log_and_print("ERROR", f"Error handling audio message: {str(e)}")
+            traceback.print_exc()
 
 ###################
 # SETUP AND INITIALIZATION
@@ -1484,24 +1571,46 @@ def webhook():
         
         # Extract message content
         content_type = message_data.get('type', '')
+        log_and_print("INFO", f"Message content type: {content_type}")
         
         # Handle media messages (images)
-        if content_type in ['image', 'video', 'document', 'audio']:
-            log_and_print("INFO", f"Detected media message from {from_number}, type: {content_type}")
-            # Process as image
+        if content_type == 'image':
+            log_and_print("INFO", f"Detected image message from {from_number}")
             marketing_bot.handle_image_message(from_number, message_data)
-            return jsonify({"status": "success", "message": "Media processed"})
+            return jsonify({"status": "success", "message": "Image processed"})
+        
+        # Handle audio messages
+        elif content_type in ['audio', 'voice', 'ptt']:
+            log_and_print("INFO", f"Detected audio message from {from_number}")
+            marketing_bot.handle_audio_message(from_number)
+            return jsonify({"status": "success", "message": "Audio processed"})
+        
+        # Handle document messages that might be images
+        elif content_type == 'document':
+            log_and_print("INFO", f"Detected document message from {from_number}")
+            # Check if it's an image document
+            mime_type = message_data.get('mimetype', '')
+            if mime_type and mime_type.startswith('image/'):
+                log_and_print("INFO", f"Document is an image, processing as image")
+                marketing_bot.handle_image_message(from_number, message_data)
+            else:
+                log_and_print("INFO", f"Document is not an image, sending reminder")
+                marketing_bot.handle_audio_message(from_number)  # Reuse audio handler for generic response
+            return jsonify({"status": "success", "message": "Document processed"})
         
         # Handle text messages
-        if content_type == 'text':
+        elif content_type == 'text':
             body = message_data.get('text', '')
             log_and_print("INFO", f"Detected text message from {from_number}: {body}")
             marketing_bot.handle_text_message(from_number, body)
             return jsonify({"status": "success", "message": "Text processed"})
         
         # Fallback for other message types
-        log_and_print("WARNING", f"Unhandled message type: {content_type}")
-        return jsonify({"status": "success", "message": f"Unhandled message type: {content_type}"})
+        else:
+            log_and_print("WARNING", f"Unhandled message type: {content_type}")
+            # Send a generic response for unhandled types
+            marketing_bot.handle_audio_message(from_number)  # Reuse audio handler for generic response
+            return jsonify({"status": "success", "message": f"Unhandled message type: {content_type}"})
     
     except Exception as e:
         log_and_print("ERROR", f"Webhook error: {str(e)}")
