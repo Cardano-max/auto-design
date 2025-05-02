@@ -2056,6 +2056,13 @@ def webhook():
         # Handle media messages (images)
         if content_type == 'image':
             log_and_print("INFO", f"Detected image message from {from_number}")
+            # Log additional message data for debugging
+            log_and_print("DEBUG", f"Message data: {json.dumps(message_data, indent=2)}")
+            
+            # Check for direct media URL
+            if 'media' in message_data:
+                log_and_print("INFO", f"Found media URL in message: {message_data['media'][:50]}...")
+            
             # Pass full webhook data to handle_image_message
             marketing_bot.handle_image_message(from_number, webhook_data)
             return jsonify({"status": "success", "message": "Image processed"})
