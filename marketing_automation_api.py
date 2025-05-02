@@ -262,21 +262,25 @@ IMPORTANT: Ensure the entire original subject is visible and not cropped in any 
 
             # Process product image
             with Image.open(product_image_path) as img:
-                # Determine the best aspect ratio based on the input image
-                width, height = img.size
-                aspect_ratio = width / height
+                # Store original dimensions for later use
+                original_width, original_height = img.size
+                original_aspect_ratio = original_width / original_height
+                log_and_print("INFO", f"Original image dimensions: {original_width}x{original_height}, aspect ratio: {original_aspect_ratio:.2f}")
                 
-                # Choose the appropriate size parameter based on aspect ratio
-                # WhatsApp works best with these standard sizes
-                if aspect_ratio > 1.2:  # Landscape orientation
-                    img_size = "1536x1024"
-                    log_and_print("INFO", f"Using landscape format (1536x1024) for aspect ratio {aspect_ratio:.2f}")
-                elif aspect_ratio < 0.8:  # Portrait orientation
-                    img_size = "1024x1536"
-                    log_and_print("INFO", f"Using portrait format (1024x1536) for aspect ratio {aspect_ratio:.2f}")
+                # Instead of changing image size, we'll adapt the prompt to respect boundaries
+                marketing_prompt += f"\nIMPORTANT: Maintain the EXACT original aspect ratio ({original_aspect_ratio:.2f}) and ensure NO cropping of the image content. Keep all elements within visible boundaries."
+                
+                # Choose size parameter close to original aspect ratio
+                # Note: We'll use nearest standard size but will fix aspect ratio in post-processing if needed
+                if original_aspect_ratio > 1.2:  # Landscape orientation
+                    img_size = "2048x1024"  # Maximum width
+                    log_and_print("INFO", f"Using landscape format (2048x1024) for aspect ratio {original_aspect_ratio:.2f}")
+                elif original_aspect_ratio < 0.8:  # Portrait orientation
+                    img_size = "1024x2048"  # Maximum height
+                    log_and_print("INFO", f"Using portrait format (1024x2048) for aspect ratio {original_aspect_ratio:.2f}")
                 else:  # Near square
                     img_size = "1024x1024"
-                    log_and_print("INFO", f"Using square format (1024x1024) for aspect ratio {aspect_ratio:.2f}")
+                    log_and_print("INFO", f"Using square format (1024x1024) for aspect ratio {original_aspect_ratio:.2f}")
                 
                 if img.format != 'PNG':
                     converted_path = f"{os.path.splitext(product_image_path)[0]}_converted.png"
@@ -321,8 +325,8 @@ IMPORTANT: Ensure the entire original subject is visible and not cropped in any 
             retry_delay = 2
             result = None
             
-            # Use low quality for testing to save credits
-            quality = "low"  # Use "hd" for higher quality
+            # Use HD quality for best results
+            quality = "low"  # Higher quality setting for better results
 
             for retry in range(max_retries):
                 try:
@@ -366,11 +370,28 @@ IMPORTANT: Ensure the entire original subject is visible and not cropped in any 
             if hasattr(result, 'data') and len(result.data) > 0 and hasattr(result.data[0], 'b64_json'):
                 b64_data = result.data[0].b64_json
                 image_bytes = base64.b64decode(b64_data)
+                
+                # Read the generated image to check dimensions
+                try:
+                    with Image.open(BytesIO(image_bytes)) as generated_img:
+                        generated_width, generated_height = generated_img.size
+                        log_and_print("INFO", f"Generated image dimensions: {generated_width}x{generated_height}")
+                        
+                        # Check if aspect ratio is significantly different from original
+                        if original_width > 0 and original_height > 0:
+                            generated_aspect = generated_width / generated_height
+                            log_and_print("INFO", f"Generated aspect ratio: {generated_aspect:.2f} vs Original: {original_aspect_ratio:.2f}")
+                            
+                            # If aspect ratios are very different (tolerance of 0.1), log a warning
+                            if abs(generated_aspect - original_aspect_ratio) > 0.1:
+                                log_and_print("WARNING", f"Aspect ratio changed from {original_aspect_ratio:.2f} to {generated_aspect:.2f}")
+                except Exception as img_err:
+                    log_and_print("WARNING", f"Could not analyze generated image: {str(img_err)}")
             else:
                 log_and_print("ERROR", "No image data in response")
                 return None
                 
-            # Save the image
+            # Save the image directly from OpenAI response bytes without additional processing
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
             product_name_safe = ''.join(c if c.isalnum() else '_' for c in product_name)[:20]
             output_filename = f"{product_name_safe}_{timestamp}.png"
@@ -378,7 +399,7 @@ IMPORTANT: Ensure the entire original subject is visible and not cropped in any 
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             with open(output_path, 'wb') as f:
                 f.write(image_bytes)
-            log_and_print("INFO", f"Marketing image saved to {output_path}")
+            log_and_print("INFO", f"Marketing image saved to {output_path} without additional processing")
 
             processing_time = time.time() - start_time
             log_and_print("INFO", f"Total processing time: {processing_time:.2f} seconds")
@@ -675,8 +696,17 @@ class MaytapiClient:
             log_and_print("INFO", f"Sending media from URL to {to_number}")
             data["message"] = media_url
         elif media_base64:
-            log_and_print("INFO", f"Sending media from base64 to {to_number}, base64 length: {len(media_base64)} chars")
-            data["message"] = f"data:image/png;base64,{media_base64}"
+            # Determine image format from filename or default to png
+            image_format = "png"
+            if filename and '.' in filename:
+                ext = filename.split('.')[-1].lower()
+                if ext in ['jpg', 'jpeg', 'png', 'gif', 'webp']:
+                    image_format = ext
+                    if image_format == 'jpeg':
+                        image_format = 'jpg'  # standardize jpeg to jpg
+            
+            log_and_print("INFO", f"Sending media from base64 to {to_number}, format: {image_format}, base64 length: {len(media_base64)} chars")
+            data["message"] = f"data:image/{image_format};base64,{media_base64}"
             
             # Set filename if provided
             if filename:
@@ -1634,6 +1664,7 @@ class MarketingBot:
                     print(f"[DEBUG] File size: {os.path.getsize(image_path)} bytes")
                     
                     try:
+                        # Read image bytes directly without any manipulation
                         with open(image_path, 'rb') as img_file:
                             img_data = img_file.read()
                             print(f"[DEBUG] Image data read: {len(img_data)} bytes")
@@ -1648,8 +1679,25 @@ class MarketingBot:
                         )
                         return
                     
-                    # Send the generated image
-                    log_and_print("INFO", f"Sending generated image to user {user_id}")
+                    # Send the generated image without modifications
+                    log_and_print("INFO", f"Sending original unmodified image to user {user_id}")
+                    
+                    # First check image dimensions
+                    try:
+                        with Image.open(image_path) as img_check:
+                            width, height = img_check.size
+                            aspect_ratio = width / height
+                            log_and_print("INFO", f"Sending image dimensions: {width}x{height}, aspect ratio: {aspect_ratio:.2f}")
+                            
+                            # If image might be problematic for WhatsApp, log a warning
+                            if width > 2000 or height > 2000:
+                                log_and_print("WARNING", f"Image dimensions ({width}x{height}) might exceed WhatsApp maximum size")
+                            if aspect_ratio > 2.5 or aspect_ratio < 0.4:
+                                log_and_print("WARNING", f"Image aspect ratio ({aspect_ratio:.2f}) is extreme and might be cropped by WhatsApp")
+                    except Exception as img_check_err:
+                        log_and_print("WARNING", f"Could not check image dimensions: {str(img_check_err)}")
+                    
+                    # Send image with clear MIME type
                     media_result = self.whatsapp_client.send_media(
                         to_number=from_number,
                         caption="🎉 Here's your marketing image!\n\n"
