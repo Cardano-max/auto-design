@@ -418,16 +418,16 @@ class MaytapiClient:
                     response = requests.get(url, headers=self.headers, timeout=30)
                 elif method.upper() == "POST":
                     response = requests.post(url, headers=self.headers, json=data, timeout=30)
-            else:
+                else:
                     log_and_print("ERROR", f"Invalid method: {method}")
-                return {"success": False, "error": "Invalid method"}
-            
+                    return {"success": False, "error": "Invalid method"}
+                
                 # Log response status
                 log_and_print("INFO", f"Response status code: {response.status_code}")
                 
                 # Try to get JSON response
                 try:
-            result = response.json()
+                    result = response.json()
                     if response.status_code >= 400:
                         log_and_print("ERROR", f"API error: HTTP {response.status_code}")
                         if retry < max_retries - 1:
@@ -437,7 +437,7 @@ class MaytapiClient:
                             continue
                     
                     # Success - return result
-            return result
+                    return result
                 except Exception as json_error:
                     log_and_print("ERROR", f"Failed to parse JSON response: {str(json_error)}")
                     # Check if we should retry
@@ -447,9 +447,9 @@ class MaytapiClient:
                         retry_delay *= 2
                         continue
                     return {"success": False, "error": f"Invalid JSON response: {response.text[:200]}..."}
-                
+                    
             except requests.exceptions.Timeout:
-                log_and_print("ERROR", f"Request timeout to Maytapi API")
+                log_and_print("ERROR", "Request timeout to Maytapi API")
                 if retry < max_retries - 1:
                     log_and_print("INFO", f"Retrying in {retry_delay} seconds...")
                     time.sleep(retry_delay)
@@ -458,7 +458,7 @@ class MaytapiClient:
                 return {"success": False, "error": "API request timed out"}
                 
             except requests.exceptions.ConnectionError:
-                log_and_print("ERROR", f"Connection error to Maytapi API")
+                log_and_print("ERROR", "Connection error to Maytapi API")
                 if retry < max_retries - 1:
                     log_and_print("INFO", f"Retrying in {retry_delay} seconds...")
                     time.sleep(retry_delay)
@@ -466,15 +466,15 @@ class MaytapiClient:
                     continue
                 return {"success": False, "error": "API connection error"}
                 
-        except Exception as e:
+            except Exception as e:
                 log_and_print("ERROR", f"Error making request to Maytapi API: {str(e)}")
                 if retry < max_retries - 1:
                     log_and_print("INFO", f"Retrying in {retry_delay} seconds...")
                     time.sleep(retry_delay)
                     retry_delay *= 2
                     continue
-            return {"success": False, "error": str(e)}
-    
+                return {"success": False, "error": str(e)}
+        
         # If we get here, all retries have failed
         return {"success": False, "error": "All retries failed"}
     
