@@ -1795,21 +1795,21 @@ class MarketingBot:
             # Get user's session
             session = self.session_manager.get_session(from_number)
             user_id = session["user_id"]
-        
-        # Debug session state
+            
+            # Debug session state
             log_and_print("INFO", f"Current session state for user {user_id}: {session['state']}")
-        
-        # Check if we're in the right state to receive an image
-        if session['state'] != 'waiting_for_image':
+            
+            # Check if we're in the right state to receive an image
+            if session['state'] != 'waiting_for_image':
                 log_and_print("WARNING", f"User {user_id} sent image but session state is {session['state']}, not waiting_for_image")
                 self.whatsapp_client.send_message(
-                from_number,
-                "I wasn't expecting an image right now.\n"
+                    from_number,
+                    "I wasn't expecting an image right now.\n"
                     "To start the process, please send 'edit' first.\n\n"
                     "You can also type 'cancel' to exit the current process."
-            )
-            return
-        
+                )
+                return
+            
             # Process the image from webhook data with proper error handling
             try:
                 # Extract image data from the webhook data
@@ -1829,16 +1829,15 @@ class MarketingBot:
                     except Exception as img_error:
                         log_and_print("ERROR", f"Extracted data is not a valid image: {str(img_error)}")
                         image_valid = False
-            else:
+                else:
                     log_and_print("ERROR", f"Extracted image data too small or empty: {len(image_bytes) if image_bytes else 0} bytes")
                     image_valid = False
                 
                 # If we couldn't get valid image data, inform the user
                 if not image_valid:
                     log_and_print("WARNING", f"Could not extract valid image data from user {user_id}, sending error message")
-                
                     self.whatsapp_client.send_message(
-                    from_number,
+                        from_number,
                         "⚠️ I received your image but couldn't process it properly.\n\n"
                         "Please try sending the image again, or send a different image.\n\n"
                         "Type 'cancel' if you'd like to exit the process and try again later."
@@ -1867,19 +1866,19 @@ class MarketingBot:
                 
                 # Send confirmation and request details
                 self.whatsapp_client.send_message(
-                from_number,
-                "✅ Product image received!\n\n"
-                "Now please provide the following details:\n\n"
-                "1️⃣ Company name\n"
-                "2️⃣ Product name\n"
-                "3️⃣ Price\n"
-                "4️⃣ Tagline (optional)\n"
-                "5️⃣ Address (optional)\n\n"
-                "You can send them one by one or all at once.\n"
-                "Example format:\n"
-                "Company: ABC Corp\n"
-                "Product: Premium Coffee\n"
-                "Price: $20\n\n"
+                    from_number,
+                    "✅ Product image received!\n\n"
+                    "Now please provide the following details:\n\n"
+                    "1️⃣ Company name\n"
+                    "2️⃣ Product name\n"
+                    "3️⃣ Price\n"
+                    "4️⃣ Tagline (optional)\n"
+                    "5️⃣ Address (optional)\n\n"
+                    "You can send them one by one or all at once.\n"
+                    "Example format:\n"
+                    "Company: ABC Corp\n"
+                    "Product: Premium Coffee\n"
+                    "Price: $20\n\n"
                     "When you're ready to generate the image, send 'generate'\n\n"
                     "You can type 'cancel' at any time to exit the process."
                 )
@@ -1890,21 +1889,21 @@ class MarketingBot:
                 log_and_print("ERROR", f"Error processing image for user {user_id}: {str(process_error)}")
                 traceback.print_exc()
                 self.whatsapp_client.send_message(
-                from_number,
+                    from_number,
                     "Sorry, I couldn't process your image. Please try again.\n"
                     "Send 'edit' to start over or 'cancel' to exit."
-            )
-            
-    except Exception as e:
+                )
+                
+        except Exception as e:
             log_and_print("ERROR", f"Error handling image message from {from_number}: {str(e)}")
             traceback.print_exc()
-        try:
+            try:
                 self.whatsapp_client.send_message(
-                from_number,
-                "Sorry, I couldn't process your image. Please try again.\n"
+                    from_number,
+                    "Sorry, I couldn't process your image. Please try again.\n"
                     "Start over by sending 'edit' or type 'cancel' to exit."
-            )
-        except Exception as send_error:
+                )
+            except Exception as send_error:
                 log_and_print("ERROR", f"Failed to send error message: {str(send_error)}")
     
     def handle_audio_message(self, from_number: str):
