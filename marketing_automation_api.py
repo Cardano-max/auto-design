@@ -322,23 +322,9 @@ IMPORTANT FINAL INSTRUCTIONS:
 
             # Continue processing the image
             with Image.open(product_image_path) as img:
-                # Choose size parameter close to original aspect ratio
-                # Note: OpenAI only supports: '1024x1024', '1024x1536', '1536x1024', and 'auto'
-                
-                # For extreme aspect ratios, use 'auto' which might do a better job of preserving content
-                if original_aspect_ratio > 2.0 or original_aspect_ratio < 0.5:
-                    img_size = "auto"
-                    log_and_print("INFO", f"Using 'auto' size for extreme aspect ratio {original_aspect_ratio:.2f}")
-                # For standard aspect ratios, use the closest predefined size
-                elif original_aspect_ratio > 1.2:  # Landscape orientation
-                    img_size = "1536x1024"  # Maximum allowed width
-                    log_and_print("INFO", f"Using landscape format (1536x1024) for aspect ratio {original_aspect_ratio:.2f}")
-                elif original_aspect_ratio < 0.8:  # Portrait orientation
-                    img_size = "1024x1536"  # Maximum allowed height
-                    log_and_print("INFO", f"Using portrait format (1024x1536) for aspect ratio {original_aspect_ratio:.2f}")
-                else:  # Near square
-                    img_size = "1024x1024"
-                    log_and_print("INFO", f"Using square format (1024x1024) for aspect ratio {original_aspect_ratio:.2f}")
+                # Use 'auto' size parameter to let the model choose the best size
+                img_size = "auto"
+                log_and_print("INFO", f"Using 'auto' size parameter to let the model choose optimal dimensions")
                 
                 if img.format != 'PNG':
                     converted_path = f"{os.path.splitext(product_image_path)[0]}_converted.png"
@@ -383,8 +369,8 @@ IMPORTANT FINAL INSTRUCTIONS:
             retry_delay = 2
             result = None
             
-            # Use low quality for testing (set to "hd" for production)
-            quality = "low"  # Set to "low" for testing to save API costs
+            # Use auto quality to let the model choose the best quality
+            quality = "auto"  # Using auto instead of low for optimal results
             
             # Keep track of moderation errors to implement fallback strategy
             had_moderation_error = False
