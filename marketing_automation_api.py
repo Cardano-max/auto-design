@@ -108,7 +108,7 @@ log_and_print("INFO", f"Environment variables loaded. Product ID: {MAYTAPI_PRODU
 class PromptTemplates:
     @staticmethod
     def get_master_template(product_details: Dict) -> str:
-        """Generate the master prompt template with product details"""
+        """Generate the master prompt template with fixed positioning only"""
         logger.debug(f"Generating master template with product details: {product_details}")
         return f"""Create a stunning, professional marketing poster that looks like it was crafted by an expert graphic designer:
 
@@ -117,89 +117,87 @@ class PromptTemplates:
    - Do NOT modify, filter, stylize or alter the original subject in ANY way
    - Maintain all original colors, textures, reflections and details of the subject perfectly
 
-2. EXPERT DESIGN ELEMENTS:
-   - Create a visually striking layout with perfect visual hierarchy and balance
-   - Design a premium, elegant typography system using complementary professional fonts
-   - Position company name "{product_details.get('company_name', '')}" in a commanding position with premium typography
-   - Create an eye-catching product name "{product_details.get('product_name', '')}" display with perfect typography
-   - Design a professional price badge for "{product_details.get('price', '')}" that draws attention without overwhelming
-   - Add tagline "{product_details.get('tagline', '')}" with sophisticated typography that enhances the message
-   - Include address "{product_details.get('address', '')}" in a clean, understated way that doesn't distract
+2. ELEMENT POSITIONING (MAINTAIN CONSISTENT PLACEMENT):
+   - Company name "{product_details.get('company_name', '')}" must be at the TOP of the poster
+   - Product name "{product_details.get('product_name', '')}" must be centered ABOVE the product
+   - Tagline "{product_details.get('tagline', '')}" must be placed BELOW the product
+   - Price "{product_details.get('price', '')}" must be positioned in the BOTTOM-RIGHT corner
+   - Address "{product_details.get('address', '')}" must be at the VERY BOTTOM in a single horizontal line
 
-3. PROFESSIONAL FINISHES:
-   - Create a high-end background that enhances the subject with subtle gradients or textures
-   - Apply professional design techniques like layering, subtle shadows, and balanced negative space
-   - Use a sophisticated color palette that complements the subject perfectly
-   - Add subtle lighting effects that enhance dimensionality without being distracting
-   - Implement expert-level visual hierarchy that guides the eye through the composition
-   - Ensure perfect alignment of all elements with professional spacing and margins
+3. DYNAMIC DESIGN ELEMENTS (USE AI REASONING FOR BEST RESULTS):
+   - Choose the best fonts, colors, and styling based on the specific product and overall design
+   - Determine the optimal size, weight, and visual treatment for each text element
+   - Apply professional design techniques that best complement this specific product
+   - Use your reasoning to create a cohesive color palette that enhances this particular subject
+   - Adapt the background style to suit this specific product while keeping text positions fixed
 
 4. TECHNICAL EXCELLENCE:
-   - Maintain exact original aspect ratio ({original_aspect_ratio:.2f})
+   - Maintain exact original aspect ratio
    - Keep safe margins for all text to prevent any edge cropping
    - Ensure perfect readability of all text at various viewing sizes
    - Create pixel-perfect alignment of all design elements
-   - Apply subtle, tasteful design accents that enhance rather than distract
 
 The final result must look like it was created by a professional graphic designer with years of experience in marketing design, with impeccable attention to detail, perfect visual balance, and a high-end aesthetic while keeping the original subject completely untouched.
 """
 
     @staticmethod
     def get_beverage_template(product_details: Dict) -> str:
-        """Generate beverage-specific prompt template"""
+        """Generate beverage-specific prompt template with fixed positioning only"""
         logger.debug(f"Generating beverage template with product details: {product_details}")
         return f"""Create a premium café marketing poster for a beverage with these specifications:
 
-1. PRODUCT ENHANCEMENT:
+1. ELEMENT POSITIONING (MAINTAIN CONSISTENT PLACEMENT):
+   - Company name: "{product_details.get('company_name', '')}" must be at the TOP of the poster
+   - Product name: "{product_details.get('product_name', '')}" must be placed ABOVE the beverage product
+   - Tagline: "{product_details.get('tagline', '')}" must be positioned BELOW the product
+   - Price: "{product_details.get('price', '')}" must be in the BOTTOM-RIGHT corner
+   - Address: "{product_details.get('address', '')}" must be at the VERY BOTTOM in a single horizontal line
+
+2. PRODUCT ENHANCEMENT:
    - Center the beverage as the focal point
    - Remove the original background completely
    - Keep whipped cream, garnishes, and toppings visible and appetizing
    - Add subtle steam effects for hot drinks or condensation for cold drinks
    - Enhance beverage colors for visual appeal
 
-2. BRANDING PLACEMENT:
-   - Company: "{product_details.get('company_name', '')}" at top in elegant script font
-   - Product: "{product_details.get('product_name', '')}" below the product
-   - Price: "{product_details.get('price', '')}" in a circular price tag, bottom corner
-   - Tagline: "{product_details.get('tagline', '')}" below company name
-   - Location: "{product_details.get('address', '')}" in smaller font at bottom
+3. DYNAMIC DESIGN ELEMENTS (USE AI REASONING FOR BEST RESULTS):
+   - Use your reasoning to select fonts, colors, and styling that best suit this specific beverage
+   - Choose the optimal visual treatment for this particular drink
+   - Determine the most appealing background style for this specific product
+   - Adapt the design language to enhance this particular beverage's qualities
+   - Keep only the positioning fixed while dynamically optimizing all other design aspects
 
-3. AESTHETIC ELEMENTS:
-   - Warm background color that complements the drink
-   - Subtle coffee beans/relevant ingredients in background
-   - Soft vignette effect to focus on the drink
-   - Style similar to Starbucks or premium coffee shop marketing
-
-Create a professional marketing poster as described above.
+This dynamic approach allows you to create the most appealing design for each unique product while maintaining consistent element positioning across all marketing materials.
 """
 
     @staticmethod
     def get_food_template(product_details: Dict) -> str:
-        """Generate food-specific prompt template"""
+        """Generate food-specific prompt template with fixed positioning only"""
         logger.debug(f"Generating food template with product details: {product_details}")
         return f"""Create an appetizing marketing poster for a food product with these specifications:
 
-1. PRODUCT PRESENTATION:
+1. ELEMENT POSITIONING (MAINTAIN CONSISTENT PLACEMENT):
+   - Company name: "{product_details.get('company_name', '')}" must be at the TOP of the poster
+   - Product name: "{product_details.get('product_name', '')}" must be placed ABOVE the food product
+   - Tagline: "{product_details.get('tagline', '')}" must be positioned BELOW the product
+   - Price: "{product_details.get('price', '')}" must be in the BOTTOM-RIGHT corner
+   - Address: "{product_details.get('address', '')}" must be at the VERY BOTTOM in a single horizontal line
+
+2. PRODUCT PRESENTATION:
    - Center the food item as the focal point
    - Remove the original background completely
    - Enhance food textures and colors for appetite appeal
    - Add steam effects for hot items or fresh appearance for cold items
    - Ensure the food looks perfectly prepared
 
-2. BRANDING ELEMENTS:
-   - Company: "{product_details.get('company_name', '')}" at top in clean font
-   - Product: "{product_details.get('product_name', '')}" below the food in bold font
-   - Price: "{product_details.get('price', '')}" in an eye-catching badge
-   - Tagline: "{product_details.get('tagline', '')}" emphasizing flavor/freshness
-   - Location: "{product_details.get('address', '')}" at bottom in readable font
+3. DYNAMIC DESIGN ELEMENTS (USE AI REASONING FOR BEST RESULTS):
+   - Use your reasoning to select fonts, colors, and styling that best suit this specific food item
+   - Choose the optimal visual treatment for this particular dish
+   - Determine the most appealing background style for this specific product
+   - Adapt the design language to enhance this particular food's qualities
+   - Keep only the positioning fixed while dynamically optimizing all other design aspects
 
-3. MARKETING ENHANCEMENT:
-   - Background complementing the food's colors
-   - Subtle ingredients in background for context
-   - Professional food photography style
-   - Balance all elements for premium restaurant look
-
-Create a professional food marketing poster as described above.
+This dynamic approach allows you to create the most appealing design for each unique product while maintaining consistent element positioning across all marketing materials.
 """
 
 ###################
