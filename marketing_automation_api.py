@@ -203,12 +203,16 @@ class ImageGenerator:
         self.client = openai_client
         logger.info(f"ImageGenerator initialized with OpenAI API")
     
-    def generate_marketing_image(self, product_image_path: str, product_details: Dict, product_type: str = "beverage", logo_image_path: str = None) -> Optional[str]:
+    def generate_marketing_image(self, product_image_path: str, product_details: Dict, product_type: str = "beverage", logo_image_path: str = None) -> Tuple[Optional[str], Optional[Dict]]:
         """
         Generate a marketing image using OpenAI API with gpt-image-1 model.
         Uses a direct prompt approach with a single API call.
         If logo_image_path is provided, it will be incorporated in the prompt.
-        Returns the output image path or None on failure.
+        
+        Returns:
+            Tuple containing (output_path, image_info) where:
+            - output_path is the path to the generated image or None on failure
+            - image_info is a dictionary with metadata about the image or None on failure
         """
         try:
             start_time = time.time()
@@ -217,7 +221,20 @@ class ImageGenerator:
             # Use global logger instead of self.logger
             log_and_print("INFO", f"Generating marketing image for {product_name}")
             
-            # Build the enhanced direct prompt
+            # Ensure the product image exists
+            if not os.path.exists(product_image_path):
+                log_and_print("ERROR", f"Product image not found at path: {product_image_path}")
+                return None, None
+            
+            # First, open the image and get dimensions
+            original_aspect_ratio = 1.0  # Default value
+            with Image.open(product_image_path) as img:
+                # Store original dimensions for later use
+                original_width, original_height = img.size
+                original_aspect_ratio = original_width / original_height
+                log_and_print("INFO", f"Original image dimensions: {original_width}x{original_height}, aspect ratio: {original_aspect_ratio:.2f}")
+            
+            # Now build the enhanced direct prompt with the aspect ratio
             marketing_prompt = f"""
 Create a professional, high-end marketing poster with these specific requirements:
 
@@ -288,21 +305,8 @@ IMPORTANT FINAL INSTRUCTIONS:
             
             log_and_print("INFO", f"Direct marketing prompt: {marketing_prompt[:100]}...")
 
-            # Ensure images are PNG and not too large
-            if not os.path.exists(product_image_path):
-                log_and_print("ERROR", f"Product image not found at path: {product_image_path}")
-                return None
-
-            # Process product image
+            # Continue processing the image
             with Image.open(product_image_path) as img:
-                # Store original dimensions for later use
-                original_width, original_height = img.size
-                original_aspect_ratio = original_width / original_height
-                log_and_print("INFO", f"Original image dimensions: {original_width}x{original_height}, aspect ratio: {original_aspect_ratio:.2f}")
-                
-                # Instead of changing image size, we'll adapt the prompt to respect boundaries
-                marketing_prompt += f"\nIMPORTANT: Maintain the EXACT original aspect ratio ({original_aspect_ratio:.2f}) and ensure NO cropping of the image content. Keep all elements within visible boundaries."
-                
                 # Choose size parameter close to original aspect ratio
                 # Note: OpenAI only supports: '1024x1024', '1024x1536', '1536x1024', and 'auto'
                 
@@ -403,7 +407,7 @@ IMPORTANT FINAL INSTRUCTIONS:
                         retry_delay *= 2
                     else:
                         log_and_print("ERROR", "All API call retries failed")
-                        return None
+                        return None, None
 
             # Process the result
             if hasattr(result, 'data') and len(result.data) > 0 and hasattr(result.data[0], 'b64_json'):
@@ -435,7 +439,7 @@ IMPORTANT FINAL INSTRUCTIONS:
                     log_and_print("WARNING", f"Could not analyze generated image: {str(img_err)}")
             else:
                 log_and_print("ERROR", "No image data in response")
-                return None
+                return None, None
                 
             # Save the image directly from OpenAI response bytes without additional processing
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -476,7 +480,7 @@ IMPORTANT FINAL INSTRUCTIONS:
         except Exception as e:
             log_and_print("ERROR", f"Error generating marketing image: {str(e)}")
             log_and_print("ERROR", f"Traceback: {traceback.format_exc()}")
-            return None
+            return None, None
 
 ###################
 # MAYTAPI WHATSAPP API
