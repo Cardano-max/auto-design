@@ -219,42 +219,71 @@ class ImageGenerator:
             
             # Build the enhanced direct prompt
             marketing_prompt = f"""
-Create a premium marketing poster:
-- Keep the original subject EXACTLY as-is with no changes or distortions.
-- Overlay company name "{product_details.get('company_name', '')}" at top-center in bold, elegant font.
-- Place product name "{product_details.get('product_name', '')}" below the subject in attractive typography.
-- Add price badge "{product_details.get('price', '')}" in bottom-right corner with eye-catching design.
-- Include tagline "{product_details.get('tagline', '')}" beneath product name in stylish font.
-- Show address "{product_details.get('address', '')}" in small font at bottom.
+Create a professional, high-end marketing poster with these specific requirements:
+
+1. PRODUCT TREATMENT (CRITICAL):
+   - Keep the original subject (product) ABSOLUTELY UNCHANGED - preserve its exact appearance, position, and all details
+   - Do not alter, distort, modify or stylize the original product in ANY way
+   - Maintain the product's original colors, proportions, and all visual characteristics
+
+2. COMPOSITION & LAYOUT:
+   - Position company name "{product_details.get('company_name', '')}" at the top in an elegant, premium font
+   - Place product name "{product_details.get('product_name', '')}" prominently below the product in attractive typography
+   - Create a professional price badge displaying "{product_details.get('price', '')}" in the bottom-right corner
+   - Include tagline "{product_details.get('tagline', '')}" in a stylish complementary font under the product name
+   - Position address "{product_details.get('address', '')}" at the bottom in a smaller, clean font
+
+3. DESIGN REQUIREMENTS:
+   - Use a light, complementary gradient background that enhances the subject
+   - Ensure ALL text is within safe margins (not too close to edges) to prevent cropping
+   - Create balanced, professional typography with proper spacing and alignment
+   - Apply subtle shadows or effects to make text stand out without being excessive
+   - Maintain a clean, high-end look like professional graphic design work
+   - Ensure the final result looks like a premium marketing poster created by a professional designer
+
+4. TECHNICAL SPECIFICATIONS:
+   - Maintain the exact original aspect ratio ({original_aspect_ratio:.2f})
+   - Keep all content within safe zones to prevent any text from being cropped
+   - Ensure text is legible and appropriately sized for viewing on mobile devices
+   - Create a cohesive color scheme that complements the product
 """
 
             # Add product-specific enhancements based on type
             if product_type.lower() == "beverage":
                 marketing_prompt += """
-- Add subtle steam effects for hot drinks or condensation for cold drinks.
-- Use warm, inviting colors that complement the beverage.
-- Create an atmosphere that enhances the drink's appeal.
+5. BEVERAGE-SPECIFIC ENHANCEMENTS:
+   - Add subtle visual elements that suggest freshness or temperature (steam for hot drinks, condensation for cold)
+   - Use colors and lighting that enhance the beverage's appeal
+   - Create an atmosphere that evokes the beverage's qualities (energizing, refreshing, comforting, etc.)
+   - Maintain a gourmet/premium aesthetic suitable for a high-end café or restaurant
 """
             elif product_type.lower() == "food":
                 marketing_prompt += """
-- Enhance food presentation with subtle lighting effects.
-- Use colors that stimulate appetite and complement the food.
-- Create a premium restaurant-quality aesthetic.
+5. FOOD-SPECIFIC ENHANCEMENTS:
+   - Add subtle visual elements that enhance appetite appeal
+   - Use warm, inviting colors that complement the food
+   - Create an elegant, restaurant-quality presentation
+   - Maintain a gourmet/premium aesthetic suitable for culinary marketing
 """
             
             # Add logo instruction if provided
             if logo_image_path:
                 marketing_prompt += """
-- Place the provided logo in the top-left corner at appropriate size.
-- Ensure the logo integrates well with the overall design.
+6. LOGO PLACEMENT:
+   - Integrate the provided logo in a balanced position (typically top-left or top-right)
+   - Size the logo appropriately - visible but not overwhelming the composition
+   - Ensure the logo stands out clearly against the background
+   - Maintain the logo's original appearance and colors
 """
             
             # Add final quality instructions
             marketing_prompt += """
-Use a light gradient background that complements the subject.
-Ensure all text is perfectly readable and professionally positioned.
-Create a balanced, high-end marketing design while preserving the original subject exactly.
-IMPORTANT: Ensure the entire original subject is visible and not cropped in any way.
+IMPORTANT FINAL INSTRUCTIONS:
+- This should look like a professionally designed marketing poster, not an edited photo
+- Text should appear as if it was thoughtfully designed and placed by a graphic designer
+- The original product must remain COMPLETELY UNALTERED - this is the highest priority
+- Ensure all elements work together harmoniously like a cohesive brand design
+- Create a result that would be ready for immediate use in professional marketing
 """
             
             log_and_print("INFO", f"Direct marketing prompt: {marketing_prompt[:100]}...")
