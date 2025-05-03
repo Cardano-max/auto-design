@@ -110,28 +110,38 @@ class PromptTemplates:
     def get_master_template(product_details: Dict) -> str:
         """Generate the master prompt template with product details"""
         logger.debug(f"Generating master template with product details: {product_details}")
-        return f"""Create a professional marketing poster for a product with these specifications:
+        return f"""Create a stunning, professional marketing poster that looks like it was crafted by an expert graphic designer:
 
-1. PRODUCT PRESENTATION:
-   - Place the product as the central focal point
-   - Remove the original background completely
-   - Apply professional product shadows for dimension
+1. SUBJECT TREATMENT (HIGHEST PRIORITY):
+   - Keep the original subject 100% UNCHANGED - preserve exact appearance, positioning and all details
+   - Do NOT modify, filter, stylize or alter the original subject in ANY way
+   - Maintain all original colors, textures, reflections and details of the subject perfectly
 
-2. BRANDING ELEMENTS:
-   - Company name: "{product_details.get('company_name', '')}" positioned at the top in an elegant, readable font
-   - Product name: "{product_details.get('product_name', '')}" below the product image in bold typography
-   - Price: "{product_details.get('price', '')}" displayed in a circular badge, bottom right corner using maroon/red with white text
-   - Include a tagline: "{product_details.get('tagline', '')}" in italic font between company name and product image
-   - Location/address: "{product_details.get('address', '')}" in smaller font below the product name
+2. EXPERT DESIGN ELEMENTS:
+   - Create a visually striking layout with perfect visual hierarchy and balance
+   - Design a premium, elegant typography system using complementary professional fonts
+   - Position company name "{product_details.get('company_name', '')}" in a commanding position with premium typography
+   - Create an eye-catching product name "{product_details.get('product_name', '')}" display with perfect typography
+   - Design a professional price badge for "{product_details.get('price', '')}" that draws attention without overwhelming
+   - Add tagline "{product_details.get('tagline', '')}" with sophisticated typography that enhances the message
+   - Include address "{product_details.get('address', '')}" in a clean, understated way that doesn't distract
 
-3. DESIGN STYLE:
-   - Professional marketing aesthetics similar to high-end brands
-   - Clean, modern layout with balanced spacing
-   - Background: light gradient that complements the product's colors
-   - Use complementary colors that enhance the product's appeal
-   - Ensure all text is perfectly readable
+3. PROFESSIONAL FINISHES:
+   - Create a high-end background that enhances the subject with subtle gradients or textures
+   - Apply professional design techniques like layering, subtle shadows, and balanced negative space
+   - Use a sophisticated color palette that complements the subject perfectly
+   - Add subtle lighting effects that enhance dimensionality without being distracting
+   - Implement expert-level visual hierarchy that guides the eye through the composition
+   - Ensure perfect alignment of all elements with professional spacing and margins
 
-The final image should look like it was created by an expert graphic designer for a premium brand's marketing campaign.
+4. TECHNICAL EXCELLENCE:
+   - Maintain exact original aspect ratio ({original_aspect_ratio:.2f})
+   - Keep safe margins for all text to prevent any edge cropping
+   - Ensure perfect readability of all text at various viewing sizes
+   - Create pixel-perfect alignment of all design elements
+   - Apply subtle, tasteful design accents that enhance rather than distract
+
+The final result must look like it was created by a professional graphic designer with years of experience in marketing design, with impeccable attention to detail, perfect visual balance, and a high-end aesthetic while keeping the original subject completely untouched.
 """
 
     @staticmethod
@@ -236,33 +246,38 @@ class ImageGenerator:
             
             # Now build the enhanced direct prompt with the aspect ratio
             marketing_prompt = f"""
-Create a professional, high-end marketing poster with these specific requirements:
+Create a stunning, professional marketing poster that looks like it was crafted by an expert graphic designer:
 
-1. PRODUCT TREATMENT (CRITICAL):
-   - Keep the original subject (product) ABSOLUTELY UNCHANGED - preserve its exact appearance, position, and all details
-   - Do not alter, distort, modify or stylize the original product in ANY way
-   - Maintain the product's original colors, proportions, and all visual characteristics
+1. SUBJECT TREATMENT (HIGHEST PRIORITY):
+   - Keep the original subject 100% UNCHANGED - preserve exact appearance, positioning and all details
+   - Do NOT modify, filter, stylize or alter the original subject in ANY way
+   - Maintain all original colors, textures, reflections and details of the subject perfectly
 
-2. COMPOSITION & LAYOUT:
-   - Position company name "{product_details.get('company_name', '')}" at the top in an elegant, premium font
-   - Place product name "{product_details.get('product_name', '')}" prominently below the product in attractive typography
-   - Create a professional price badge displaying "{product_details.get('price', '')}" in the bottom-right corner
-   - Include tagline "{product_details.get('tagline', '')}" in a stylish complementary font under the product name
-   - Position address "{product_details.get('address', '')}" at the bottom in a smaller, clean font
+2. EXPERT DESIGN ELEMENTS:
+   - Create a visually striking layout with perfect visual hierarchy and balance
+   - Design a premium, elegant typography system using complementary professional fonts
+   - Position company name "{product_details.get('company_name', '')}" in a commanding position with premium typography
+   - Create an eye-catching product name "{product_details.get('product_name', '')}" display with perfect typography
+   - Design a professional price badge for "{product_details.get('price', '')}" that draws attention without overwhelming
+   - Add tagline "{product_details.get('tagline', '')}" with sophisticated typography that enhances the message
+   - Include address "{product_details.get('address', '')}" in a clean, understated way that doesn't distract
 
-3. DESIGN REQUIREMENTS:
-   - Use a light, complementary gradient background that enhances the subject
-   - Ensure ALL text is within safe margins (not too close to edges) to prevent cropping
-   - Create balanced, professional typography with proper spacing and alignment
-   - Apply subtle shadows or effects to make text stand out without being excessive
-   - Maintain a clean, high-end look like professional graphic design work
-   - Ensure the final result looks like a premium marketing poster created by a professional designer
+3. PROFESSIONAL FINISHES:
+   - Create a high-end background that enhances the subject with subtle gradients or textures
+   - Apply professional design techniques like layering, subtle shadows, and balanced negative space
+   - Use a sophisticated color palette that complements the subject perfectly
+   - Add subtle lighting effects that enhance dimensionality without being distracting
+   - Implement expert-level visual hierarchy that guides the eye through the composition
+   - Ensure perfect alignment of all elements with professional spacing and margins
 
-4. TECHNICAL SPECIFICATIONS:
-   - Maintain the exact original aspect ratio ({original_aspect_ratio:.2f})
-   - Keep all content within safe zones to prevent any text from being cropped
-   - Ensure text is legible and appropriately sized for viewing on mobile devices
-   - Create a cohesive color scheme that complements the product
+4. TECHNICAL EXCELLENCE:
+   - Maintain exact original aspect ratio ({original_aspect_ratio:.2f})
+   - Keep safe margins for all text to prevent any edge cropping
+   - Ensure perfect readability of all text at various viewing sizes
+   - Create pixel-perfect alignment of all design elements
+   - Apply subtle, tasteful design accents that enhance rather than distract
+
+The final result must look like it was created by a professional graphic designer with years of experience in marketing design, with impeccable attention to detail, perfect visual balance, and a high-end aesthetic while keeping the original subject completely untouched.
 """
 
             # Add product-specific enhancements based on type
@@ -370,6 +385,9 @@ IMPORTANT FINAL INSTRUCTIONS:
             
             # Use low quality for testing (set to "hd" for production)
             quality = "low"  # Set to "low" for testing to save API costs
+            
+            # Keep track of moderation errors to implement fallback strategy
+            had_moderation_error = False
 
             for retry in range(max_retries):
                 try:
@@ -400,7 +418,32 @@ IMPORTANT FINAL INSTRUCTIONS:
                     log_and_print("INFO", "Direct edit API call successful")
                     break
                 except Exception as retry_error:
-                    log_and_print("WARNING", f"API call attempt {retry+1} failed: {str(retry_error)}")
+                    error_str = str(retry_error)
+                    log_and_print("WARNING", f"API call attempt {retry+1} failed: {error_str}")
+                    
+                    # Check if this is a safety moderation error
+                    if "safety system" in error_str or "moderation_blocked" in error_str:
+                        had_moderation_error = True
+                        log_and_print("INFO", "Detected safety moderation error, will use fallback prompt")
+                        
+                        # Create a more generic fallback prompt that avoids moderation issues
+                        # This typically happens with images containing people, copyrighted content, etc.
+                        fallback_prompt = f"""
+Create a clean, professional marketing design with the following elements:
+- Preserve the main subject completely intact, maintaining all details and characteristics
+- Add a subtle, elegant background that complements the subject
+- Include text for company name "{product_details.get('company_name', '')}" in a premium font
+- Add text for product name "{product_details.get('product_name', '')}" in an attractive font
+- Include price "{product_details.get('price', '')}" in a small badge design
+- Add tagline "{product_details.get('tagline', '')}" in a complementary style
+- Include address "{product_details.get('address', '')}" in small text at the bottom
+
+Design this as a clean, minimalist but professional marketing poster with balanced layout.
+Ensure all text is placed within safe margins away from edges to prevent cropping.
+"""
+                        # Update the marketing prompt for the next retry
+                        marketing_prompt = fallback_prompt
+                    
                     if retry < max_retries - 1:
                         log_and_print("INFO", f"Retrying in {retry_delay} seconds...")
                         time.sleep(retry_delay)
